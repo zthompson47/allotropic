@@ -168,23 +168,35 @@ async fn animate2() -> Result<()> {
                     // Take normalized magnitudes
                     let mut meter: Vec<f32> = samples
                         .iter()
-                        //.skip(1)
+                        .skip(1)
                         //.skip((width / 2) + 1)
                         //.skip(width / 2)
                         .take(width / 2)
-                        //.map(|x| x / (samples.len() as f32).sqrt())
                         //.map(|x| x * 2.)
-                        //.map(|x| x.norm_sqr().sqrt())
+                        .map(|x| x.norm_sqr().sqrt())
                         //.map(|x| x.norm())
                         //.map(|x| 20. * x.log10())
                         //.map(|x| x / samples.len() as f32)
                         //.map(|x| 20. * x.log(10.))
-                        .map(|x| (x.re.powi(2) + x.im.powi(2)).sqrt())
-                        .map(|x| x / samples.len() as f32)
+                        //.map(|x| (x.re.powi(2) + x.im.powi(2)).sqrt())
+                        .map(|x| x / (samples.len() as f32).sqrt())
+                        //.map(|x| x / samples.len() as f32)
                         //.map(|x| x.norm())
                         .collect();
 
-                    meter = meter.iter().skip(1).map(|x| 2f32.sqrt() * x).collect();
+                    meter = meter
+                        .iter()
+                        .map(|x| 20. * x.log10())
+                        .map(|x| {
+                            if x < -30. {
+                                0.
+                            } else if x > 0. {
+                                1.
+                            } else {
+                                (x + 30.) / 30.
+                            }
+                        })
+                        .collect();
 
                     // meter = meter.iter().map(|x| 20. * x.log10()).collect();
 
@@ -253,7 +265,8 @@ async fn animate2() -> Result<()> {
     stdout.flush().unwrap();
 
     //let mut xx = 0.;
-    let height = 16;
+    //let height = 16;
+    let height = size().1 as usize;
     loop {
         let levels = &*rx.borrow();
         //println!("{:?}", rx.borrow());
@@ -305,10 +318,10 @@ fn animate() -> Result<()> {
     let gg = GridGradient2::from(vec![colorgrad::rainbow(), colorgrad::magma()]);
 
     let (tx, rx) = std::sync::mpsc::sync_channel::<()>(0);
-    ctrlc::set_handler(move || {
-        tx.send(()).unwrap();
-    })
-    .unwrap();
+    //ctrlc::set_handler(move || {
+    //    tx.send(()).unwrap();
+    //})
+    //.unwrap();
 
     stdout.queue(cursor::Hide).unwrap();
     stdout.queue(terminal::EnterAlternateScreen).unwrap();
