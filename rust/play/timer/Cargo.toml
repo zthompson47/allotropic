@@ -8,3 +8,4 @@ edition = "2018"
 
 [dependencies]
 mio = { version = "0.7.11", features = ["os-poll"] }
+tokio = { version = "1.6", features = ["sync"] }

@@ -5,6 +5,7 @@ use time::sleep;
 
 fn main() {
     let mut rt = Runner::new();
+
     let f1 = async {
         for _ in 0..3 {
             println!("f1");
@@ -20,41 +21,68 @@ fn main() {
         "47"
     };
 
-    rt.spawn(f1);
-    rt.spawn(f2);
+    eprintln!("before spawn f1");
+    rt.spawn(async move {
+        println!("{:?}", f1.await);
+    });
+    eprintln!("after spawn f1");
+
+    eprintln!("before spawn f2");
+    rt.spawn(async move {
+        println!("{:?}", f2.await);
+    });
+    eprintln!("after spawn f2");
+
+    eprintln!("before run");
     rt.run();
+    eprintln!("after run");
 }
 
 mod wait {
-    use std::{io, task::Waker, thread_local, time::Duration};
+    use std::{cell::RefCell, collections::BinaryHeap, io, thread_local, time::Duration};
 
     use mio::{Events, Poll};
 
     thread_local! {
-        pub static THREAD_WAITER: Waiter<'static> = Waiter::new().unwrap();
+        pub static THREAD_WAITER: RefCell<Waiter> = RefCell::new(Waiter::new().unwrap());
     }
 
-    pub struct Waiter<'a> {
+    pub struct Waiter {
         poll: Poll,
         events: Events,
-        queue: Vec<(&'static str, Duration, &'a Waker)>,
+        queue: BinaryHeap<Duration>,
     }
 
-    impl Waiter<'_> {
+    impl Waiter {
         pub fn new() -> io::Result<Self> {
             Ok(Waiter {
                 poll: Poll::new()?,
                 events: Events::with_capacity(8),
-                queue: Vec::new(),
+                queue: BinaryHeap::new(),
             })
         }
 
-        pub fn push(&self, req: (&str, Duration, &Waker)) {
-
+        pub fn push_next_wake(&mut self, req: Duration) {
+            eprintln!("--->>WAIT: push_next_wake {:?}", req);
+            self.queue.push(req);
         }
 
         pub fn wait(&mut self) {
-            self.poll.poll(&mut self.events, Some(Duration::from_millis(1477)));
+            eprintln!("QUEUELEN: {}", self.queue.len());
+            let heap = self.queue.to_owned();
+            let mut v = heap.into_sorted_vec();
+            v.reverse();
+            let dur = v.pop();
+            self.queue = BinaryHeap::from(v);
+            eprintln!("QUEUELEN: {}", self.queue.len());
+            eprintln!("=====>>QUEUE: {:?}", self.queue);
+            eprintln!("WAITER: queue.len():{:?}, dur:{:?}", self.queue.len(), dur);
+            if self.queue.is_empty() {
+                return;
+            }
+            self.poll.poll(&mut self.events, dur).unwrap();
+            self.queue = BinaryHeap::new(); //TODO?
+            eprintln!("WAITER: after poll");
         }
     }
 }
@@ -63,8 +91,10 @@ mod run {
     use std::{
         future::Future,
         pin::Pin,
-        task::{Context, Poll},
+        task::{Context, Poll, RawWaker, RawWakerVTable, Waker},
     };
+
+    use crate::wait::THREAD_WAITER;
 
     pub struct Task<T> {
         fut: Pin<Box<dyn Future<Output = T>>>,
@@ -79,20 +109,78 @@ mod run {
     }
 
     pub struct Runner {
-        tasks: Vec<Box<dyn Future<Output = ()>>>,
+        tasks: Vec<Pin<Box<dyn Future<Output = ()>>>>,
+        waiting: Vec<Pin<Box<dyn Future<Output = ()>>>>,
     }
 
     impl Runner {
         pub fn new() -> Self {
-            Runner { tasks: Vec::new() }
+            Runner {
+                tasks: Vec::new(),
+                waiting: Vec::new(),
+            }
         }
 
-        pub fn spawn<F: Future>(&mut self, f: F) -> Task<F::Output>
-        {
-            self.tasks.push(Box::new(f));
+        pub fn spawn<F: Future + 'static>(&mut self, f: F) -> Task<F::Output> {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            let fut = async move {
+                let _ = tx.send(f.await);
+            };
+            self.tasks.push(Box::pin(fut));
+            Task {
+                fut: Box::pin(async move { rx.await.unwrap() }),
+            }
         }
 
-        pub fn run(&self) {}
+        pub fn run(mut self) {
+            loop {
+                eprintln!("RUN: about to drain");
+                for mut task in self.tasks.drain(..) {
+                    unsafe {
+                        let waker = Waker::from_raw(new_raw_waker());
+                        let mut context = Context::from_waker(&waker);
+                        match task.as_mut().poll(&mut context) {
+                            Poll::Pending => self.waiting.push(task),
+                            Poll::Ready(()) => {}
+                        }
+                    }
+                }
+                eprintln!("RUN: about to wait");
+                THREAD_WAITER.with(|waiter| {
+                    eprintln!("RUN: about to wait INNER");
+                    waiter.borrow_mut().wait();
+                });
+                if self.tasks.is_empty() && self.waiting.is_empty() {
+                    break;
+                } else {
+                    std::mem::swap(&mut self.tasks, &mut self.waiting);
+                }
+            }
+        }
+    }
+
+    fn new_raw_waker() -> RawWaker {
+        RawWaker::new(std::ptr::null(), &VTABLE)
+    }
+
+    static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, wake, wake_by_ref, drop);
+
+    unsafe fn clone(_data: *const ()) -> RawWaker {
+        eprintln!("**clone!");
+        new_raw_waker()
+    }
+
+    unsafe fn wake(data: *const ()) {
+        eprintln!("**wake!");
+        wake_by_ref(data);
+    }
+
+    unsafe fn wake_by_ref(_data: *const ()) {
+        eprintln!("**wake_by_ref!");
+    }
+
+    unsafe fn drop(_data: *const ()) {
+        // eprintln!("**drop!");
     }
 }
 
@@ -126,13 +214,13 @@ mod time {
     impl Future for Timer {
         type Output = ();
 
-        fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
-            if Instant::now() >= self.deadline {
+        fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<()> {
+            let now = Instant::now();
+            if now >= self.deadline {
                 Poll::Ready(())
             } else {
-                let waker = cx.waker();
                 THREAD_WAITER.with(|waiter| {
-                    waiter.push(("timer", self.deadline - Instant::now(), waker));
+                    waiter.borrow_mut().push_next_wake(self.deadline - now);
                 });
                 Poll::Pending
             }
