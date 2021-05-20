@@ -54,6 +54,10 @@ mod wait {
         timers: BinaryHeap<Instant>,
     }
 
+    enum Event {
+        Timer,
+    }
+
     impl Waiter {
         pub fn new() -> io::Result<Self> {
             Ok(Waiter {
@@ -64,7 +68,7 @@ mod wait {
         }
 
         pub fn push_next_wake(&mut self, req: Instant) {
-            eprintln!("--->>WAIT: push_next_wake {:?}", req);
+            eprintln!("--->>WAIT: push_next_wake {:?}", req - Instant::now());
             self.timers.push(req);
         }
 
@@ -80,14 +84,21 @@ mod wait {
             let mut v = heap.into_sorted_vec();
             v.reverse();
             let timeout = v.pop().unwrap();
+            eprintln!("---GOT timeout:{:?}", timeout - Instant::now());
             self.timers = BinaryHeap::from(v);
 
-            eprintln!("QUEUELEN: {}", self.timers.len());
-            eprintln!("=====>>QUEUE: {:?}", self.timers);
+            eprintln!("QUEUELEN_2: {}", self.timers.len());
+            eprintln!(
+                "=====>>QUEUE: {:?}",
+                self.timers
+                    .iter()
+                    .map(|x| *x - Instant::now())
+                    .collect::<Vec<Duration>>()
+            );
             eprintln!(
                 "WAITER: queue.len():{:?}, dur:{:?}",
                 self.timers.len(),
-                timeout
+                timeout - Instant::now()
             );
 
             let now = Instant::now();
@@ -96,7 +107,9 @@ mod wait {
                 dur = timeout - now;
             }
 
+            eprintln!("BEFORE: {:?}", dur);
             self.poll.poll(&mut self.events, Some(dur)).unwrap();
+            eprintln!("AFTER: {:?}", dur);
         }
     }
 }
@@ -112,8 +125,7 @@ mod time {
     use crate::wait::WAITER;
 
     pub async fn sleep(duration: Duration) {
-        let timer = Timer::new(duration);
-        timer.await;
+        Timer::new(duration).await;
     }
 
     struct Timer {
@@ -134,9 +146,12 @@ mod time {
         type Output = ();
 
         fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<()> {
-            if Instant::now() >= self.deadline {
+            let now = Instant::now();
+            if now >= self.deadline {
+                eprintln!("TIMER__POLL__READY");
                 Poll::Ready(())
             } else {
+                eprintln!("TIMER__POLL__PENDING: {:?}", self.deadline - now);
                 Poll::Pending
             }
         }
@@ -148,7 +163,7 @@ mod run {
         future::Future,
         pin::Pin,
         sync::{Arc, Mutex},
-        task::{Context, Poll, RawWaker, RawWakerVTable, Waker},
+        task::{Context, Poll}, // , RawWaker, RawWakerVTable, Waker},
     };
 
     use crossbeam::channel;
@@ -156,22 +171,26 @@ mod run {
 
     use crate::wait::WAITER;
 
-    type InnerFut = Pin<Box<dyn Future<Output = ()>>>;
-
-    pub struct Task<T> {
-        fut: Mutex<Pin<Box<dyn Future<Output = T> + Send>>>,
-        // queue_tx: channel::Sender<InnerFut>,
+    struct Task {
+        fut: Mutex<Pin<Box<dyn Future<Output = ()> + Send + Sync>>>,
+        queue_tx: channel::Sender<Arc<Task>>,
     }
 
-    /*
-    impl<T> Task<T> {
-        fn awake(&self) {
-            self.queue_tx.send(self.fut).unwrap();
+    impl ArcWake for Task {
+        fn wake_by_ref(arc_self: &Arc<Self>) {
+            arc_self.queue_tx.send(arc_self.clone()).unwrap();
+        }
+
+        fn wake(self: Arc<Self>) {
+            ArcWake::wake_by_ref(&self);
         }
     }
-    */
 
-    impl<T> Future for Task<T> {
+    pub struct TaskHandle<T> {
+        fut: Mutex<Pin<Box<dyn Future<Output = T> + Send>>>,
+    }
+
+    impl<T> Future for TaskHandle<T> {
         type Output = T;
 
         fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<T> {
@@ -179,78 +198,70 @@ mod run {
         }
     }
 
-    /*
-    impl<T> ArcWake for Task<T> {
-        fn wake_by_ref(arc_self: &Arc<Self>) {
-            arc_self.awake();
-        }
-    }
-    */
-
     pub struct Runner {
-        // tasks: Vec<Pin<Box<dyn Future<Output = ()>>>>,
-        waiting: Vec<Pin<Box<dyn Future<Output = ()>>>>,
-        queue_rx: channel::Receiver<InnerFut>,
-        queue_tx: channel::Sender<InnerFut>,
+        waiting: Vec<Arc<Task>>,
+        queue_rx: channel::Receiver<Arc<Task>>,
+        queue_tx: channel::Sender<Arc<Task>>,
     }
 
     impl Runner {
         pub fn new() -> Self {
             let (queue_tx, queue_rx) = channel::unbounded();
             Runner {
-                // tasks: Vec::new(),
                 waiting: Vec::new(),
                 queue_tx,
                 queue_rx,
             }
         }
 
-        pub fn spawn<T, F>(&mut self, f: F) -> Task<T>
+        pub fn spawn<T, F>(&mut self, f: F) -> TaskHandle<T>
         where
             T: Send + 'static,
-            F: Future<Output = T> + Send + 'static,
+            F: Future<Output = T> + Send + Sync + 'static,
         {
             let (tx, rx) = oneshot::channel();
             let fut = async move {
                 let _ = tx.send(f.await);
             };
 
-            // self.tasks.push(Box::pin(fut));
-            self.queue_tx.send(Box::pin(fut)).unwrap();
+            let task = Task {
+                fut: Mutex::new(Box::pin(fut)),
+                queue_tx: self.queue_tx.clone(),
+            };
 
-            Task {
+            self.queue_tx.send(Arc::new(task)).unwrap();
+
+            TaskHandle {
                 fut: Mutex::new(Box::pin(async move { rx.await.unwrap() })),
-                // queue_tx: self.queue_tx.clone(),
             }
         }
 
         pub fn run(mut self) {
             loop {
                 eprintln!("RUN: about to drain");
-                // for mut task in self.tasks.drain(..) {
-                while let Some(mut task) = self.queue_rx.try_iter().next() {
-                    unsafe {
-                        let waker = Waker::from_raw(new_raw_waker());
+                while let Some(task) = self.queue_rx.try_iter().next() {
+                    eprintln!("RUN: POLLING TASK");
+                    //unsafe {
+                    {
+                        // let waker = Waker::from_raw(new_raw_waker());
+                        let waker = futures::task::waker(task.clone());
                         let mut context = Context::from_waker(&waker);
-                        match task.as_mut().poll(&mut context) {
-                            //Poll::Pending => self.queue_tx.send(task).unwrap(),
-                            Poll::Pending => self.waiting.push(task),
-                            Poll::Ready(()) => {}
+                        let mut fut = task.fut.lock().unwrap();
+                        match fut.as_mut().poll(&mut context) {
+                            Poll::Pending => {
+                                eprintln!("RUN: POLLED-->PENDING");
+                                self.waiting.push(task.clone());
+                            }
+                            Poll::Ready(()) => eprintln!("RUN: POLLED-->READY"),
                         }
                     }
                 }
-                eprintln!("RUN: about to wait");
+
                 WAITER.with(|waiter| {
                     eprintln!("RUN: about to wait INNER");
                     waiter.borrow_mut().wait();
                 });
-                /*
-                if self.tasks.is_empty() && self.waiting.is_empty() {
-                    break;
-                } else {
-                    std::mem::swap(&mut self.tasks, &mut self.waiting);
-                }
-                */
+
                 if self.waiting.is_empty() {
                     break;
                 } else {
@@ -262,6 +273,7 @@ mod run {
         }
     }
 
+    /*
     fn new_raw_waker() -> RawWaker {
         RawWaker::new(std::ptr::null(), &VTABLE)
     }
@@ -285,4 +297,5 @@ mod run {
     unsafe fn drop(_data: *const ()) {
         // eprintln!("**drop!");
     }
+    */
 }
