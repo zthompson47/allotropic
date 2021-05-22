@@ -44,6 +44,8 @@ mod wait {
 
     use mio::{Events, Poll};
 
+    use crate::time::TimerWaker;
+
     thread_local! {
         pub static WAITER: RefCell<Waiter> = RefCell::new(Waiter::new().unwrap());
     }
@@ -51,11 +53,7 @@ mod wait {
     pub struct Waiter {
         poll: Poll,
         events: Events,
-        timers: BinaryHeap<Instant>,
-    }
-
-    enum Event {
-        Timer,
+        timers: BinaryHeap<TimerWaker>,
     }
 
     impl Waiter {
@@ -67,16 +65,13 @@ mod wait {
             })
         }
 
-        pub fn push_next_wake(&mut self, req: Instant) {
-            eprintln!("--->>WAIT: push_next_wake {:?}", req - Instant::now());
+        pub fn push_next_wake(&mut self, req: TimerWaker) {
             self.timers.push(req);
         }
 
-        pub fn wait(&mut self) {
-            eprintln!("QUEUELEN: {}", self.timers.len());
-
+        pub fn wait(&mut self) -> bool {
             if self.timers.is_empty() {
-                return;
+                return false;
             }
 
             // Get smallest timeout
@@ -84,41 +79,30 @@ mod wait {
             let mut v = heap.into_sorted_vec();
             v.reverse();
             let timeout = v.pop().unwrap();
-            eprintln!("---GOT timeout:{:?}", timeout - Instant::now());
             self.timers = BinaryHeap::from(v);
-
-            eprintln!("QUEUELEN_2: {}", self.timers.len());
-            eprintln!(
-                "=====>>QUEUE: {:?}",
-                self.timers
-                    .iter()
-                    .map(|x| *x - Instant::now())
-                    .collect::<Vec<Duration>>()
-            );
-            eprintln!(
-                "WAITER: queue.len():{:?}, dur:{:?}",
-                self.timers.len(),
-                timeout - Instant::now()
-            );
 
             let now = Instant::now();
             let mut dur = Duration::from_millis(0);
-            if now < timeout {
-                dur = timeout - now;
+            if now < timeout.deadline {
+                dur = timeout.deadline - now;
             }
 
             eprintln!("BEFORE: {:?}", dur);
             self.poll.poll(&mut self.events, Some(dur)).unwrap();
+            timeout.waker.wake();
             eprintln!("AFTER: {:?}", dur);
+
+            true
         }
     }
 }
 
 mod time {
     use std::{
+        cmp::Ordering,
         future::Future,
         pin::Pin,
-        task::{Context, Poll},
+        task::{Context, Poll, Waker},
         time::{Duration, Instant},
     };
 
@@ -132,12 +116,35 @@ mod time {
         deadline: Instant,
     }
 
+    #[derive(Clone)]
+    pub struct TimerWaker {
+        pub deadline: Instant,
+        pub waker: Waker,
+    }
+
+    impl Eq for TimerWaker {}
+
+    impl PartialEq for TimerWaker {
+        fn eq(&self, other: &Self) -> bool {
+            self.deadline == other.deadline
+        }
+    }
+
+    impl Ord for TimerWaker {
+        fn cmp(&self, other: &Self) -> Ordering {
+            self.deadline.cmp(&other.deadline)
+        }
+    }
+
+    impl PartialOrd for TimerWaker {
+        fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+            Some(self.cmp(other))
+        }
+    }
+
     impl Timer {
         fn new(duration: Duration) -> Self {
             let deadline = Instant::now() + duration;
-            WAITER.with(|waiter| {
-                waiter.borrow_mut().push_next_wake(deadline);
-            });
             Timer { deadline }
         }
     }
@@ -145,13 +152,19 @@ mod time {
     impl Future for Timer {
         type Output = ();
 
-        fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<()> {
+        fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
             let now = Instant::now();
             if now >= self.deadline {
                 eprintln!("TIMER__POLL__READY");
                 Poll::Ready(())
             } else {
                 eprintln!("TIMER__POLL__PENDING: {:?}", self.deadline - now);
+                WAITER.with(|waiter| {
+                    waiter.borrow_mut().push_next_wake(TimerWaker {
+                        deadline: self.deadline,
+                        waker: cx.waker().clone(),
+                    });
+                });
                 Poll::Pending
             }
         }
@@ -160,16 +173,21 @@ mod time {
 
 mod run {
     use std::{
+        cell::RefCell,
         future::Future,
         pin::Pin,
         sync::{Arc, Mutex},
-        task::{Context, Poll}, // , RawWaker, RawWakerVTable, Waker},
+        task::{Context, Poll},
     };
 
     use crossbeam::channel;
     use futures::{channel::oneshot, task::ArcWake};
 
     use crate::wait::WAITER;
+
+    thread_local! {
+        pub static RUNTIME: Option<RefCell<Runner>> = None;
+    }
 
     struct Task {
         fut: Mutex<Pin<Box<dyn Future<Output = ()> + Send + Sync>>>,
@@ -199,7 +217,7 @@ mod run {
     }
 
     pub struct Runner {
-        waiting: Vec<Arc<Task>>,
+        // waiting: Vec<Arc<Task>>,
         queue_rx: channel::Receiver<Arc<Task>>,
         queue_tx: channel::Sender<Arc<Task>>,
     }
@@ -208,7 +226,7 @@ mod run {
         pub fn new() -> Self {
             let (queue_tx, queue_rx) = channel::unbounded();
             Runner {
-                waiting: Vec::new(),
+                // waiting: Vec::new(),
                 queue_tx,
                 queue_rx,
             }
@@ -236,66 +254,42 @@ mod run {
             }
         }
 
-        pub fn run(mut self) {
+        pub fn run(self) {
             loop {
                 eprintln!("RUN: about to drain");
                 while let Some(task) = self.queue_rx.try_iter().next() {
                     eprintln!("RUN: POLLING TASK");
-                    //unsafe {
-                    {
-                        // let waker = Waker::from_raw(new_raw_waker());
-                        let waker = futures::task::waker(task.clone());
-                        let mut context = Context::from_waker(&waker);
-                        let mut fut = task.fut.lock().unwrap();
-                        match fut.as_mut().poll(&mut context) {
-                            Poll::Pending => {
-                                eprintln!("RUN: POLLED-->PENDING");
-                                self.waiting.push(task.clone());
-                            }
-                            Poll::Ready(()) => eprintln!("RUN: POLLED-->READY"),
+                    let waker = futures::task::waker(task.clone());
+                    let mut context = Context::from_waker(&waker);
+                    let mut fut = task.fut.lock().unwrap();
+
+                    match fut.as_mut().poll(&mut context) {
+                        Poll::Pending => {
+                            eprintln!("RUN: POLLED-->PENDING");
+                            //self.waiting.push(task.clone());
                         }
+                        Poll::Ready(()) => eprintln!("RUN: POLLED-->READY"),
                     }
                 }
 
+                let mut wait_result = false;
                 WAITER.with(|waiter| {
                     eprintln!("RUN: about to wait INNER");
-                    waiter.borrow_mut().wait();
+                    wait_result = waiter.borrow_mut().wait();
                 });
+                if !wait_result {
+                    break;
+                }
 
-                if self.waiting.is_empty() {
+                /*if self.waiting.is_empty() {
+                    eprintln!("_______>> self.waiting.is_empty() <<_____________");
                     break;
                 } else {
                     for t in self.waiting.drain(..) {
                         self.queue_tx.send(t).unwrap();
                     }
-                }
+                }*/
             }
         }
     }
-
-    /*
-    fn new_raw_waker() -> RawWaker {
-        RawWaker::new(std::ptr::null(), &VTABLE)
-    }
-
-    static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, wake, wake_by_ref, drop);
-
-    unsafe fn clone(_data: *const ()) -> RawWaker {
-        eprintln!("**clone!");
-        new_raw_waker()
-    }
-
-    unsafe fn wake(data: *const ()) {
-        eprintln!("**wake!");
-        wake_by_ref(data);
-    }
-
-    unsafe fn wake_by_ref(_data: *const ()) {
-        eprintln!("**wake_by_ref!");
-    }
-
-    unsafe fn drop(_data: *const ()) {
-        // eprintln!("**drop!");
-    }
-    */
 }
