@@ -1,5 +1,8 @@
-use std::time::Duration;
+//#![allow(unused_imports)]
+//#![allow(dead_code)]
+use std::{process::Command, time::Duration};
 
+use io::CmdReader;
 use run::Runner;
 use time::sleep;
 
@@ -13,12 +16,31 @@ fn main() {
         }
         42
     };
+
     let f2 = async {
         for _ in 0..9 {
             println!("f2");
             sleep(Duration::from_millis(333)).await;
         }
         "47"
+    };
+
+    let f3 = async {
+        let mut buf = vec![0u8; 1024];
+        let mut cmd = CmdReader::new(Command::new("cat").arg("named_pipe"));
+        // println!("about to read");
+        match cmd.read(&mut buf).await {
+            Ok(len) => {
+                // println!("got OK");
+                if len == 0 {
+                    // println!("len 00000");
+                }
+                // println!("--->>{}", len);
+                print!("{}", String::from_utf8(buf[0..len].to_vec()).unwrap());
+            }
+            Err(e) => println!("{:?}", e),
+        }
+        // println!("AFTER");
     };
 
     rt.spawn(async move {
@@ -31,18 +53,136 @@ fn main() {
         println!("f2 done");
     });
 
+    rt.spawn(async move {
+        f3.await;
+    });
+
     rt.run();
+}
+
+mod io {
+    use std::{
+        future::Future,
+        io::{ErrorKind, Read, Result},
+        os::unix::io::AsRawFd,
+        pin::Pin,
+        process::{Child, ChildStdout, Command, Stdio},
+        task::{Context, Poll},
+    };
+
+    use mio::{event::Source, unix::SourceFd, Interest, Registry, Token};
+
+    use crate::wait::WAITER;
+
+    pub struct CmdReader {
+        command: Child,
+        stdout: ChildStdout,
+    }
+
+    impl CmdReader {
+        pub fn new(cmd: &mut Command) -> Self {
+            let mut command = cmd.stdout(Stdio::piped()).spawn().unwrap();
+            let stdout = command.stdout.take().unwrap();
+            let fd = stdout.as_raw_fd();
+
+            unsafe {
+                let mut flags = libc::fcntl(fd, libc::F_GETFL);
+                flags |= libc::O_NONBLOCK;
+                libc::fcntl(fd, libc::F_SETFL, flags);
+            }
+
+            CmdReader { command, stdout }
+        }
+
+        pub async fn read<'a>(&'a mut self, buf: &'a mut Vec<u8>) -> Result<usize> {
+            Reader::new(&mut self.stdout, buf).await
+        }
+    }
+
+    impl Drop for CmdReader {
+        fn drop(&mut self) {
+            let _ = self.command.wait();
+        }
+    }
+
+    struct Reader<'a> {
+        stdout: &'a mut ChildStdout,
+        buf: &'a mut Vec<u8>,
+    }
+
+    impl<'a> Reader<'a> {
+        fn new(stdout: &'a mut ChildStdout, buf: &'a mut Vec<u8>) -> Self {
+            Reader { stdout, buf }
+        }
+    }
+
+    impl Source for Reader<'_> {
+        fn register(
+            &mut self,
+            registry: &Registry,
+            token: Token,
+            interests: Interest,
+        ) -> Result<()> {
+            SourceFd(&self.stdout.as_raw_fd()).register(registry, token, interests)
+        }
+
+        fn reregister(
+            &mut self,
+            registry: &Registry,
+            token: Token,
+            interests: Interest,
+        ) -> Result<()> {
+            SourceFd(&self.stdout.as_raw_fd()).reregister(registry, token, interests)
+        }
+
+        fn deregister(&mut self, registry: &Registry) -> Result<()> {
+            SourceFd(&self.stdout.as_raw_fd()).deregister(registry)
+        }
+    }
+
+    impl<'a> Future for Reader<'a> {
+        type Output = Result<usize>;
+
+        fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<usize>> {
+            let me = &mut *self;
+
+            match me.stdout.read(me.buf) {
+                Ok(len) => {
+                    // println!("---READER--len:{}--READY", len);
+                    Poll::Ready(Ok(len))
+                }
+                Err(err) => {
+                    if err.kind() == ErrorKind::WouldBlock {
+                        // println!("---READER---WouldBlock");
+                        WAITER.with(|waiter| {
+                            waiter.borrow_mut().push_reader(
+                                me,
+                                Interest::READABLE,
+                                cx.waker().clone(),
+                            );
+                        });
+                        Poll::Pending
+                    } else {
+                        // println!("---READER---err{:?}", err);
+                        Poll::Ready(Err(err))
+                    }
+                }
+            }
+        }
+    }
 }
 
 mod wait {
     use std::{
         cell::RefCell,
-        collections::BinaryHeap,
-        io, thread_local,
+        collections::{BinaryHeap, HashMap},
+        io,
+        task::Waker,
+        thread_local,
         time::{Duration, Instant},
     };
 
-    use mio::{Events, Poll};
+    use mio::{event::Source, Events, Interest, Poll, Token};
 
     use crate::time::TimerWaker;
 
@@ -54,6 +194,8 @@ mod wait {
         poll: Poll,
         events: Events,
         timers: BinaryHeap<TimerWaker>,
+        next_tok: usize,
+        readers: HashMap<Token, Waker>,
     }
 
     impl Waiter {
@@ -62,6 +204,8 @@ mod wait {
                 poll: Poll::new()?,
                 events: Events::with_capacity(8),
                 timers: BinaryHeap::new(),
+                next_tok: 0,
+                readers: HashMap::new(),
             })
         }
 
@@ -69,10 +213,34 @@ mod wait {
             self.timers.push(req);
         }
 
+        pub fn push_reader(&mut self, source: &mut impl Source, interest: Interest, waker: Waker) {
+            let token = Token(self.next_tok);
+
+            self.poll
+                .registry()
+                .register(source, Token(self.next_tok), interest)
+                .unwrap();
+
+            self.readers.insert(token, waker);
+
+            self.next_tok += 1;
+        }
+
         pub fn wait(&mut self) -> bool {
-            if self.timers.is_empty() {
+            if self.timers.is_empty() && self.readers.is_empty() {
                 return false;
             }
+
+            /*
+            let now = Instant::now();
+            println!(
+                "__timers__{:?}",
+                self.timers
+                    .iter()
+                    .map(|x| x.deadline - now)
+                    .collect::<Vec<Duration>>()
+            );
+            */
 
             // Get smallest timeout
             let heap = self.timers.to_owned();
@@ -85,12 +253,39 @@ mod wait {
             let mut dur = Duration::from_millis(0);
             if now < timeout.deadline {
                 dur = timeout.deadline - now;
+                // println!("------{:?}-------->>>> TIMER_ON", dur);
+            } else {
+                // println!("-------------->>>> TIMER_OFF");
+                timeout.waker.clone().wake();
             }
 
-            eprintln!("BEFORE: {:?}", dur);
+            /*
+            println!(
+                "timers:{:?}",
+                self.timers
+                    .iter()
+                    .map(|x| x.deadline - now)
+                    .collect::<Vec<Duration>>()
+            );
+            */
+
             self.poll.poll(&mut self.events, Some(dur)).unwrap();
-            timeout.waker.wake();
-            eprintln!("AFTER: {:?}", dur);
+            // println!("--EVENTS-->>{:?}", self.events);
+            // println!("--READERS-->>{:?}", self.readers);
+            let mut got_one = false;
+            for event in self.events.iter() {
+                // println!("--EVENT-->>{:?}", event);
+                if self.readers.contains_key(&event.token()) {
+                    // println!("-BEFORE-GOT_KEY-->>{:?}", event);
+                    self.readers.get(&event.token()).unwrap().clone().wake();
+                    // println!("-AFTER-GOT_KEY-->>{:?}", event);
+                    self.readers.remove(&event.token()).unwrap();
+                    got_one = true;
+                }
+            }
+            //if !got_one {
+                timeout.waker.wake();
+            //}
 
             true
         }
@@ -116,7 +311,7 @@ mod time {
         deadline: Instant,
     }
 
-    #[derive(Clone)]
+    #[derive(Clone, Debug)]
     pub struct TimerWaker {
         pub deadline: Instant,
         pub waker: Waker,
@@ -144,6 +339,7 @@ mod time {
 
     impl Timer {
         fn new(duration: Duration) -> Self {
+            // println!("!!!!!!!!!!!{:?}", duration);
             let deadline = Instant::now() + duration;
             Timer { deadline }
         }
@@ -155,16 +351,16 @@ mod time {
         fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
             let now = Instant::now();
             if now >= self.deadline {
-                eprintln!("TIMER__POLL__READY");
+                // println!(">>>>>>>>TIMER READY");
                 Poll::Ready(())
             } else {
-                eprintln!("TIMER__POLL__PENDING: {:?}", self.deadline - now);
                 WAITER.with(|waiter| {
                     waiter.borrow_mut().push_next_wake(TimerWaker {
                         deadline: self.deadline,
                         waker: cx.waker().clone(),
                     });
                 });
+                // println!(">>>>>>>>TIMER PENDING");
                 Poll::Pending
             }
         }
@@ -217,7 +413,6 @@ mod run {
     }
 
     pub struct Runner {
-        // waiting: Vec<Arc<Task>>,
         queue_rx: channel::Receiver<Arc<Task>>,
         queue_tx: channel::Sender<Arc<Task>>,
     }
@@ -225,11 +420,7 @@ mod run {
     impl Runner {
         pub fn new() -> Self {
             let (queue_tx, queue_rx) = channel::unbounded();
-            Runner {
-                // waiting: Vec::new(),
-                queue_tx,
-                queue_rx,
-            }
+            Runner { queue_rx, queue_tx }
         }
 
         pub fn spawn<T, F>(&mut self, f: F) -> TaskHandle<T>
@@ -256,39 +447,26 @@ mod run {
 
         pub fn run(self) {
             loop {
-                eprintln!("RUN: about to drain");
                 while let Some(task) = self.queue_rx.try_iter().next() {
-                    eprintln!("RUN: POLLING TASK");
                     let waker = futures::task::waker(task.clone());
                     let mut context = Context::from_waker(&waker);
                     let mut fut = task.fut.lock().unwrap();
 
                     match fut.as_mut().poll(&mut context) {
-                        Poll::Pending => {
-                            eprintln!("RUN: POLLED-->PENDING");
-                            //self.waiting.push(task.clone());
-                        }
-                        Poll::Ready(()) => eprintln!("RUN: POLLED-->READY"),
+                        Poll::Pending => {}
+                        Poll::Ready(()) => {}
                     }
                 }
 
                 let mut wait_result = false;
+
                 WAITER.with(|waiter| {
-                    eprintln!("RUN: about to wait INNER");
                     wait_result = waiter.borrow_mut().wait();
                 });
+
                 if !wait_result {
                     break;
                 }
-
-                /*if self.waiting.is_empty() {
-                    eprintln!("_______>> self.waiting.is_empty() <<_____________");
-                    break;
-                } else {
-                    for t in self.waiting.drain(..) {
-                        self.queue_tx.send(t).unwrap();
-                    }
-                }*/
             }
         }
     }
