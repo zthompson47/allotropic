@@ -1,5 +1,3 @@
-//#![allow(unused_imports)]
-//#![allow(dead_code)]
 use std::{process::Command, time::Duration};
 
 use io::CmdReader;
@@ -10,15 +8,15 @@ fn main() {
     let mut rt = Runner::new();
 
     let f1 = async {
-        for _ in 0..3000 {
-            println!("f11");
+        for _ in 0..30 {
+            println!("f_1");
             sleep(Duration::from_millis(999)).await;
         }
         42
     };
 
     let f2 = async {
-        for _ in 0..9000 {
+        for _ in 0..90 {
             println!("f2");
             sleep(Duration::from_millis(333)).await;
         }
@@ -28,43 +26,28 @@ fn main() {
     let f3 = async {
         let mut buf = vec![0u8; 1024];
         let mut cmd = CmdReader::new(Command::new("cat").arg("named_pipe"));
-        // println!("about to read");
+
         while let Ok(len) = cmd.read(&mut buf).await {
             if len == 0 {
                 break;
             }
             print!("{}", String::from_utf8(buf[0..len].to_vec()).unwrap());
         }
-        /*
-        match cmd.read(&mut buf).await {
-            Ok(len) => {
-                // println!("got OK");
-                if len == 0 {
-                    // println!("len 00000");
-                }
-                // println!("--->>{}", len);
-                print!("{}", String::from_utf8(buf[0..len].to_vec()).unwrap());
-            }
-            Err(e) => println!("{:?}", e),
-        }
-        */
-        // println!("AFTER about to read");
     };
 
     rt.spawn(async move {
         println!("{:?}", f1.await);
-        // println!("f1 done");
+        println!("f1 done");
     });
 
     rt.spawn(async move {
         println!("{:?}", f2.await);
-        // println!("f2 done");
+        println!("f2 done");
     });
 
     rt.spawn(async move {
-        // println!("f3 starting");
         f3.await;
-        // println!("f3 done");
+        println!("f3 done");
     });
 
     rt.run();
@@ -76,7 +59,7 @@ mod io {
         io::{ErrorKind, Read, Result},
         os::unix::io::AsRawFd,
         pin::Pin,
-        process::{Child, ChildStdout, Command, Stdio},
+        process::{ChildStdout, Command, Stdio},
         task::{Context, Poll},
     };
 
@@ -85,8 +68,6 @@ mod io {
     use crate::wait::WAITER;
 
     pub struct CmdReader {
-        #[allow(dead_code)]
-        command: Child,
         stdout: ChildStdout,
         registered: bool,
     }
@@ -103,24 +84,10 @@ mod io {
                 libc::fcntl(fd, libc::F_SETFL, flags);
             }
 
-            let mut cmd_reader = CmdReader {
-                command,
+            CmdReader {
                 stdout,
                 registered: false,
-            };
-
-            WAITER.with(|waiter| {
-                println!("++++++++++++++REGISTER++++++++++++++++++++");
-                let waiter = waiter.borrow_mut();
-                waiter
-                    .poll
-                    .registry()
-                    .register(&mut cmd_reader, Token(waiter.next_tok), Interest::READABLE)
-                    .unwrap();
-                cmd_reader.registered = true;
-            });
-
-            cmd_reader
+            }
         }
 
         pub async fn read<'a>(&'a mut self, buf: &'a mut Vec<u8>) -> Result<usize> {
@@ -168,32 +135,6 @@ mod io {
         }
     }
 
-    /*
-    impl Source for Reader<'_> {
-        fn register(
-            &mut self,
-            registry: &Registry,
-            token: Token,
-            interests: Interest,
-        ) -> Result<()> {
-            SourceFd(&self.stdout.as_raw_fd()).register(registry, token, interests)
-        }
-
-        fn reregister(
-            &mut self,
-            registry: &Registry,
-            token: Token,
-            interests: Interest,
-        ) -> Result<()> {
-            SourceFd(&self.stdout.as_raw_fd()).reregister(registry, token, interests)
-        }
-
-        fn deregister(&mut self, registry: &Registry) -> Result<()> {
-            SourceFd(&self.stdout.as_raw_fd()).deregister(registry)
-        }
-    }
-    */
-
     impl<'a> Future for Reader<'a> {
         type Output = Result<usize>;
 
@@ -207,40 +148,30 @@ mod io {
                 }
                 Err(err) => {
                     if err.kind() == ErrorKind::WouldBlock {
-                        // println!("---READER---WouldBlock");
                         WAITER.with(|waiter| {
                             let mut waiter = waiter.borrow_mut();
+                            let token = Token(waiter.next_tok);
 
                             if me.cmd_reader.registered {
-                                println!("++++++++++++++REREGISTER!!++++++++++++++++++++");
                                 waiter
                                     .poll
                                     .registry()
-                                    .reregister(
-                                        me.cmd_reader,
-                                        Token(waiter.next_tok),
-                                        Interest::READABLE,
-                                    )
+                                    .reregister(me.cmd_reader, token, Interest::READABLE)
                                     .unwrap();
                             } else {
-                                println!("++++++++++++++REGISTER++++++++++++++++++++");
                                 waiter
                                     .poll
                                     .registry()
-                                    .register(
-                                        me.cmd_reader,
-                                        Token(waiter.next_tok),
-                                        Interest::READABLE,
-                                    )
+                                    .register(me.cmd_reader, token, Interest::READABLE)
                                     .unwrap();
                                 me.cmd_reader.registered = true;
                             }
 
-                            waiter.push_reader(me, Interest::READABLE, cx.waker().clone());
+                            waiter.push_io_waker(token, cx.waker().clone());
+                            waiter.next_tok += 1;
                         });
                         Poll::Pending
                     } else {
-                        println!("---READER---err{:?}", err);
                         Poll::Ready(Err(err))
                     }
                 }
@@ -259,9 +190,8 @@ mod wait {
         time::{Duration, Instant},
     };
 
-    use mio::{event::Source, Events, Interest, Poll, Token};
+    use mio::{Events, Poll, Token};
 
-    use crate::io::Reader;
     use crate::time::TimerWaker;
 
     thread_local! {
@@ -287,56 +217,18 @@ mod wait {
             })
         }
 
-        pub fn push_next_wake(&mut self, req: TimerWaker) {
-            self.timers.push(req);
+        pub fn push_timer_waker(&mut self, timer_waker: TimerWaker) {
+            self.timers.push(timer_waker);
         }
 
-        //pub fn push_reader(&mut self, source: &mut impl Source, interest: Interest, waker: Waker) {
-        pub fn push_reader(&mut self, reader: &mut Reader, interest: Interest, waker: Waker) {
-            println!("PUSH_READER..readers:{:?}", self.readers);
-            println!("PUSH_READER..events:{:?}", self.events);
-
-            let token = Token(self.next_tok);
-
-            /*
-            if reader.registered {
-                println!("++++++++++++++REREGISTER!!++++++++++++++++++++");
-                self.poll
-                    .registry()
-                    .reregister(reader, Token(self.next_tok), interest)
-                    .unwrap();
-            } else {
-                println!("++++++++++++++REGISTER++++++++++++++++++++");
-                self.poll
-                    .registry()
-                    .register(reader, Token(self.next_tok), interest)
-                    .unwrap();
-                reader.registered = true;
-            }
-            */
-
+        pub fn push_io_waker(&mut self, token: Token, waker: Waker) {
             self.readers.insert(token, waker);
-
-            self.next_tok += 1;
         }
 
         pub fn wait(&mut self) -> bool {
             if self.timers.is_empty() && self.readers.is_empty() {
                 return false;
             }
-
-            // println!("[[[[TIMERS]]]]>>>>>{:?}", self.timers);
-
-            /*
-            let now = Instant::now();
-            println!(
-                "__timers__{:?}",
-                self.timers
-                    .iter()
-                    .map(|x| x.deadline - now)
-                    .collect::<Vec<Duration>>()
-            );
-            */
 
             // Get smallest timeout
             let mut timer_waker = None;
@@ -353,30 +245,14 @@ mod wait {
                 timeout = Some(Duration::from_millis(0));
                 if now < timer_waker_inner.deadline {
                     timeout = Some(timer_waker_inner.deadline - now);
-                    // println!("------{:?}-------->>>> TIMER_ON", dur);
                 }
                 timer_waker = Some(timer_waker_inner);
             }
 
-            /*
-            println!(
-                "timers:{:?}",
-                self.timers
-                    .iter()
-                    .map(|x| x.deadline - now)
-                    .collect::<Vec<Duration>>()
-            );
-            */
-
             self.poll.poll(&mut self.events, timeout).unwrap();
-            // println!("--EVENTS-->>{:?}", self.events);
-            // println!("--READERS-->>{:?}", self.readers);
             for event in self.events.iter() {
-                // println!("--EVENT-->>{:?}", event);
                 if self.readers.contains_key(&event.token()) {
-                    // println!("-BEFORE-GOT_KEY-->>{:?}", event);
                     self.readers.get(&event.token()).unwrap().clone().wake();
-                    // println!("-AFTER-GOT_KEY-->>{:?}", event);
                     self.readers.remove(&event.token()).unwrap();
                 }
             }
@@ -438,7 +314,6 @@ mod time {
 
     impl Timer {
         fn new(duration: Duration) -> Self {
-            // println!("!!!!!!!!!!!{:?}", duration);
             let deadline = Instant::now() + duration;
             Timer { deadline }
         }
@@ -450,16 +325,14 @@ mod time {
         fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
             let now = Instant::now();
             if now >= self.deadline {
-                // println!(">>>>>>>>TIMER READY");
                 Poll::Ready(())
             } else {
                 WAITER.with(|waiter| {
-                    waiter.borrow_mut().push_next_wake(TimerWaker {
+                    waiter.borrow_mut().push_timer_waker(TimerWaker {
                         deadline: self.deadline,
                         waker: cx.waker().clone(),
                     });
                 });
-                // println!(">>>>>>>>TIMER PENDING");
                 Poll::Pending
             }
         }
