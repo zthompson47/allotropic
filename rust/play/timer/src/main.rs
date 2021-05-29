@@ -142,10 +142,7 @@ mod io {
             let me = &mut *self;
 
             match me.cmd_reader.stdout.read(me.buf) {
-                Ok(len) => {
-                    println!("---READER--len:{}--READY", len);
-                    Poll::Ready(Ok(len))
-                }
+                Ok(len) => Poll::Ready(Ok(len)),
                 Err(err) => {
                     if err.kind() == ErrorKind::WouldBlock {
                         WAITER.with(|waiter| {
@@ -183,6 +180,7 @@ mod io {
 mod wait {
     use std::{
         cell::RefCell,
+        cmp::Reverse,
         collections::{BinaryHeap, HashMap},
         io,
         task::Waker,
@@ -198,10 +196,17 @@ mod wait {
         pub static WAITER: RefCell<Waiter> = RefCell::new(Waiter::new().unwrap());
     }
 
+    #[derive(PartialEq)]
+    pub enum WaitStatus {
+        Running,
+        Done,
+    }
+
     pub struct Waiter {
         pub poll: Poll,
         events: Events,
-        timers: BinaryHeap<TimerWaker>,
+        timers: BinaryHeap<Reverse<TimerWaker>>,
+        //timers: BinaryHeap<TimerWaker>,
         pub next_tok: usize,
         readers: HashMap<Token, Waker>,
     }
@@ -218,38 +223,35 @@ mod wait {
         }
 
         pub fn push_timer_waker(&mut self, timer_waker: TimerWaker) {
-            self.timers.push(timer_waker);
+            self.timers.push(Reverse(timer_waker));
+            //self.timers.push(timer_waker);
         }
 
         pub fn push_io_waker(&mut self, token: Token, waker: Waker) {
             self.readers.insert(token, waker);
         }
 
-        pub fn wait(&mut self) -> bool {
+        pub fn wait(&mut self) -> WaitStatus {
             if self.timers.is_empty() && self.readers.is_empty() {
-                return false;
+                return WaitStatus::Done;
             }
 
-            // Get smallest timeout
             let mut timer_waker = None;
             let mut timeout = None;
 
             if !self.timers.is_empty() {
-                let heap = self.timers.to_owned();
-                let mut v = heap.into_sorted_vec();
-                v.reverse();
-                let timer_waker_inner = v.pop().unwrap();
-                self.timers = BinaryHeap::from(v);
-
+                let timer_waker_inner = self.timers.pop().unwrap();
                 let now = Instant::now();
+
                 timeout = Some(Duration::from_millis(0));
-                if now < timer_waker_inner.deadline {
-                    timeout = Some(timer_waker_inner.deadline - now);
+                if now < timer_waker_inner.0.deadline {
+                    timeout = Some(timer_waker_inner.0.deadline - now);
                 }
                 timer_waker = Some(timer_waker_inner);
             }
 
             self.poll.poll(&mut self.events, timeout).unwrap();
+
             for event in self.events.iter() {
                 if self.readers.contains_key(&event.token()) {
                     self.readers.get(&event.token()).unwrap().clone().wake();
@@ -258,11 +260,10 @@ mod wait {
             }
 
             if let Some(tw) = timer_waker {
-                // TODO: only wake if needed..
-                tw.waker.wake();
+                tw.0.waker.wake();
             }
 
-            true
+            WaitStatus::Running
         }
     }
 }
@@ -351,7 +352,7 @@ mod run {
     use crossbeam::channel;
     use futures::{channel::oneshot, task::ArcWake};
 
-    use crate::wait::WAITER;
+    use crate::wait::{WaitStatus, WAITER};
 
     thread_local! {
         pub static RUNTIME: Option<RefCell<Runner>> = None;
@@ -430,13 +431,13 @@ mod run {
                     }
                 }
 
-                let mut wait_result = false;
+                let mut status: WaitStatus = WaitStatus::Running;
 
                 WAITER.with(|waiter| {
-                    wait_result = waiter.borrow_mut().wait();
+                    status = waiter.borrow_mut().wait();
                 });
 
-                if !wait_result {
+                if status == WaitStatus::Done {
                     break;
                 }
             }
