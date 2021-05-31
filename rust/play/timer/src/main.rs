@@ -9,7 +9,7 @@ fn main() {
 
     let f1 = async {
         for _ in 0..30 {
-            println!("f_1");
+            println!("f1");
             sleep(Duration::from_millis(999)).await;
         }
         42
@@ -142,7 +142,9 @@ mod io {
             let me = &mut *self;
 
             match me.cmd_reader.stdout.read(me.buf) {
-                Ok(len) => Poll::Ready(Ok(len)),
+                Ok(len) => {
+                    Poll::Ready(Ok(len))
+                }
                 Err(err) => {
                     if err.kind() == ErrorKind::WouldBlock {
                         WAITER.with(|waiter| {
@@ -185,7 +187,7 @@ mod wait {
         io,
         task::Waker,
         thread_local,
-        time::{Duration, Instant},
+        time::Instant,
     };
 
     use mio::{Events, Poll, Token};
@@ -206,7 +208,6 @@ mod wait {
         pub poll: Poll,
         events: Events,
         timers: BinaryHeap<Reverse<TimerWaker>>,
-        //timers: BinaryHeap<TimerWaker>,
         pub next_tok: usize,
         readers: HashMap<Token, Waker>,
     }
@@ -224,7 +225,6 @@ mod wait {
 
         pub fn push_timer_waker(&mut self, timer_waker: TimerWaker) {
             self.timers.push(Reverse(timer_waker));
-            //self.timers.push(timer_waker);
         }
 
         pub fn push_io_waker(&mut self, token: Token, waker: Waker) {
@@ -239,15 +239,9 @@ mod wait {
             let mut timer_waker = None;
             let mut timeout = None;
 
-            if !self.timers.is_empty() {
-                let timer_waker_inner = self.timers.pop().unwrap();
-                let now = Instant::now();
-
-                timeout = Some(Duration::from_millis(0));
-                if now < timer_waker_inner.0.deadline {
-                    timeout = Some(timer_waker_inner.0.deadline - now);
-                }
-                timer_waker = Some(timer_waker_inner);
+            if let Some(tw) = self.timers.pop() {
+                timeout = Some(tw.0.deadline.saturating_duration_since(Instant::now()));
+                timer_waker = Some(tw);
             }
 
             self.poll.poll(&mut self.events, timeout).unwrap();
@@ -260,7 +254,11 @@ mod wait {
             }
 
             if let Some(tw) = timer_waker {
-                tw.0.waker.wake();
+                if tw.0.deadline < Instant::now() {
+                    tw.0.waker.wake();
+                } else {
+                    self.timers.push(tw);
+                }
             }
 
             WaitStatus::Running
