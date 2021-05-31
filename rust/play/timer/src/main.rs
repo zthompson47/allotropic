@@ -142,9 +142,7 @@ mod io {
             let me = &mut *self;
 
             match me.cmd_reader.stdout.read(me.buf) {
-                Ok(len) => {
-                    Poll::Ready(Ok(len))
-                }
+                Ok(len) => Poll::Ready(Ok(len)),
                 Err(err) => {
                     if err.kind() == ErrorKind::WouldBlock {
                         WAITER.with(|waiter| {
