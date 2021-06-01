@@ -242,20 +242,20 @@ mod wait {
                 timer_waker = Some(tw);
             }
 
-            self.poll.poll(&mut self.events, timeout).unwrap();
-
-            for event in self.events.iter() {
-                if self.readers.contains_key(&event.token()) {
-                    self.readers.get(&event.token()).unwrap().clone().wake();
-                    self.readers.remove(&event.token()).unwrap();
+            if self.poll.poll(&mut self.events, timeout).is_ok() {
+                for event in self.events.iter() {
+                    if self.readers.contains_key(&event.token()) {
+                        self.readers.get(&event.token()).unwrap().clone().wake();
+                        self.readers.remove(&event.token()).unwrap();
+                    }
                 }
-            }
 
-            if let Some(tw) = timer_waker {
-                if tw.0.deadline < Instant::now() {
-                    tw.0.waker.wake();
-                } else {
-                    self.timers.push(tw);
+                if let Some(tw) = timer_waker {
+                    if tw.0.deadline < Instant::now() {
+                        tw.0.waker.wake();
+                    } else {
+                        self.timers.push(tw);
+                    }
                 }
             }
 
@@ -341,24 +341,27 @@ mod run {
         cell::RefCell,
         future::Future,
         pin::Pin,
-        sync::{Arc, Mutex},
+        rc::Rc,
         task::{Context, Poll},
     };
 
     use crossbeam::channel;
-    use futures::{channel::oneshot, task::ArcWake};
+    use futures::channel::oneshot;
 
     use crate::wait::{WaitStatus, WAITER};
+    use crate::wake::{hack_waker, HackWake};
 
     thread_local! {
         pub static RUNTIME: Option<RefCell<Runner>> = None;
     }
 
     struct Task {
-        fut: Mutex<Pin<Box<dyn Future<Output = ()> + Send + Sync>>>,
-        queue_tx: channel::Sender<Arc<Task>>,
+        fut: Pin<Box<dyn Future<Output = ()> + Send + Sync>>,
+        //queue_tx: channel::Sender<Arc<Task>>,
+        queue_tx: channel::Sender<Rc<Task>>,
     }
 
+    /*
     impl ArcWake for Task {
         fn wake_by_ref(arc_self: &Arc<Self>) {
             arc_self.queue_tx.send(arc_self.clone()).unwrap();
@@ -368,22 +371,33 @@ mod run {
             ArcWake::wake_by_ref(&self);
         }
     }
+    */
+
+    impl HackWake for Task {
+        fn awake(rc_self: &Rc<Self>) {
+            rc_self.queue_tx.send(rc_self.clone()).unwrap();
+            println!("->>>>>>>>HACKWAKE<<<<<<<<<-");
+        }
+    }
 
     pub struct TaskHandle<T> {
-        fut: Mutex<Pin<Box<dyn Future<Output = T> + Send>>>,
+        fut: Pin<Box<dyn Future<Output = T> + Send>>,
     }
 
     impl<T> Future for TaskHandle<T> {
         type Output = T;
 
-        fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<T> {
-            self.fut.lock().unwrap().as_mut().poll(cx)
+        fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<T> {
+            let me = &mut *self;
+            me.fut.as_mut().poll(cx)
         }
     }
 
     pub struct Runner {
-        queue_rx: channel::Receiver<Arc<Task>>,
-        queue_tx: channel::Sender<Arc<Task>>,
+        //queue_rx: channel::Receiver<Arc<Task>>,
+        //queue_tx: channel::Sender<Arc<Task>>,
+        queue_rx: channel::Receiver<Rc<Task>>,
+        queue_tx: channel::Sender<Rc<Task>>,
     }
 
     impl Runner {
@@ -403,28 +417,40 @@ mod run {
             };
 
             let task = Task {
-                fut: Mutex::new(Box::pin(fut)),
+                fut: Box::pin(fut),
                 queue_tx: self.queue_tx.clone(),
             };
 
-            self.queue_tx.send(Arc::new(task)).unwrap();
+            //self.queue_tx.send(Arc::new(task)).unwrap();
+            self.queue_tx.send(Rc::new(task)).unwrap();
 
             TaskHandle {
-                fut: Mutex::new(Box::pin(async move { rx.await.unwrap() })),
+                fut: Box::pin(async move { rx.await.unwrap() }),
             }
         }
 
         pub fn run(self) {
             loop {
-                while let Some(task) = self.queue_rx.try_iter().next() {
-                    let waker = futures::task::waker(task.clone());
+                while let Some(mut task) = self.queue_rx.try_iter().next() {
+                    println!("----------->>>rc.strongcount00:{}", Rc::strong_count(&task));
+                    //let waker = futures::task::waker(task.clone());
+                    println!("before hack_waker");
+                    let waker = hack_waker(task.clone());
+                    println!("----------->>>rc.strongcount01:{}", Rc::strong_count(&task));
+                    println!("before context");
                     let mut context = Context::from_waker(&waker);
-                    let mut fut = task.fut.lock().unwrap();
+                    println!("----------->>>rc.strongcount02:{}", Rc::strong_count(&task));
+                    println!("after");
 
-                    match fut.as_mut().poll(&mut context) {
-                        Poll::Pending => {}
-                        Poll::Ready(()) => {}
+                    //match task.fut.as_mut().poll(&mut context) {
+                    println!("before rc getmut");
+                    let t = Rc::get_mut(&mut task).unwrap();
+                    println!("after rc getmut");
+                    match t.fut.as_mut().poll(&mut context) {
+                        Poll::Pending => println!("POLLPEND TASK"),
+                        Poll::Ready(()) => println!("POLREDDTY TASK"),
                     }
+                    println!("---------------");
                 }
 
                 let mut status: WaitStatus = WaitStatus::Running;
@@ -438,5 +464,52 @@ mod run {
                 }
             }
         }
+    }
+}
+
+mod wake {
+    use std::{
+        ptr,
+        rc::Rc,
+        task::{RawWaker, RawWakerVTable, Waker},
+    };
+
+    pub trait HackWake {
+        fn awake(rc_self: &Rc<Self>);
+    }
+
+    pub fn hack_waker<T>(w: Rc<T>) -> Waker
+    where
+        T: HackWake + 'static,
+    {
+        println!("+++++++++++>>>rc.strongcount10:{}", Rc::strong_count(&w));
+        let p: *const () = Rc::into_raw(w).cast();
+        //println!("+++++++++++>>>rc.strongcount11:{}", Rc::strong_count(&w));
+        let vtable = &RawWakerVTable::new(clone, wake, wake_by_ref, drop);
+        let raw_waker = RawWaker::new(p, vtable);
+        unsafe { Waker::from_raw(raw_waker) }
+    }
+
+    unsafe fn clone(_: *const ()) -> RawWaker {
+        println!("**clone!");
+        new_raw_waker()
+    }
+
+    unsafe fn wake(_: *const ()) {
+        println!("**wake!");
+    }
+
+    unsafe fn wake_by_ref(_: *const ()) {
+        println!("**wake_by_ref!");
+    }
+
+    unsafe fn drop(_: *const ()) {
+        println!("**drop!");
+    }
+
+    static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, wake, wake_by_ref, drop);
+
+    fn new_raw_waker() -> RawWaker {
+        RawWaker::new(ptr::null(), &VTABLE)
     }
 }
