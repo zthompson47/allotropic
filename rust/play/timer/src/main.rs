@@ -355,10 +355,10 @@ mod run {
         pub static RUNTIME: Option<RefCell<Runner>> = None;
     }
 
-    struct Task {
+    pub struct Task {
         fut: Pin<Box<dyn Future<Output = ()> + Send + Sync>>,
         //queue_tx: channel::Sender<Arc<Task>>,
-        queue_tx: channel::Sender<Rc<Task>>,
+        queue_tx: channel::Sender<Rc<RefCell<Task>>>,
     }
 
     /*
@@ -374,9 +374,9 @@ mod run {
     */
 
     impl HackWake for Task {
-        fn awake(rc_self: &Rc<Self>) {
-            rc_self.queue_tx.send(rc_self.clone()).unwrap();
-            println!("->>>>>>>>HACKWAKE<<<<<<<<<-");
+        fn awake(rc_self: &Rc<RefCell<Self>>) {
+            rc_self.borrow().queue_tx.send(rc_self.clone()).unwrap();
+            //println!("->>>>>>>>HACKWAKE<<<<<<<<<-");
         }
     }
 
@@ -396,8 +396,8 @@ mod run {
     pub struct Runner {
         //queue_rx: channel::Receiver<Arc<Task>>,
         //queue_tx: channel::Sender<Arc<Task>>,
-        queue_rx: channel::Receiver<Rc<Task>>,
-        queue_tx: channel::Sender<Rc<Task>>,
+        queue_rx: channel::Receiver<Rc<RefCell<Task>>>,
+        queue_tx: channel::Sender<Rc<RefCell<Task>>>,
     }
 
     impl Runner {
@@ -422,7 +422,7 @@ mod run {
             };
 
             //self.queue_tx.send(Arc::new(task)).unwrap();
-            self.queue_tx.send(Rc::new(task)).unwrap();
+            self.queue_tx.send(Rc::new(RefCell::new(task))).unwrap();
 
             TaskHandle {
                 fut: Box::pin(async move { rx.await.unwrap() }),
@@ -431,26 +431,26 @@ mod run {
 
         pub fn run(self) {
             loop {
-                while let Some(mut task) = self.queue_rx.try_iter().next() {
-                    println!("----------->>>rc.strongcount00:{}", Rc::strong_count(&task));
+                while let Some(task) = self.queue_rx.try_iter().next() {
+                    //println!("----------->>>rc.strongcount00:{}", Rc::strong_count(&task));
                     //let waker = futures::task::waker(task.clone());
-                    println!("before hack_waker");
+                    //println!("before hack_waker");
                     let waker = hack_waker(task.clone());
-                    println!("----------->>>rc.strongcount01:{}", Rc::strong_count(&task));
-                    println!("before context");
+                    //println!("----------->>>rc.strongcount01:{}", Rc::strong_count(&task));
+                    //println!("before context");
                     let mut context = Context::from_waker(&waker);
-                    println!("----------->>>rc.strongcount02:{}", Rc::strong_count(&task));
-                    println!("after");
+                    //println!("----------->>>rc.strongcount02:{}", Rc::strong_count(&task));
+                    //println!("after");
 
                     //match task.fut.as_mut().poll(&mut context) {
-                    println!("before rc getmut");
-                    let t = Rc::get_mut(&mut task).unwrap();
-                    println!("after rc getmut");
-                    match t.fut.as_mut().poll(&mut context) {
-                        Poll::Pending => println!("POLLPEND TASK"),
-                        Poll::Ready(()) => println!("POLREDDTY TASK"),
+                    //println!("before rc getmut");
+                    //let t = Rc::get_mut(&mut task).unwrap();
+                    //println!("after rc getmut");
+                    match task.borrow_mut().fut.as_mut().poll(&mut context) {
+                        Poll::Pending => {} //println!("POLLPEND TASK"),
+                        Poll::Ready(()) => {} //println!("POLREDDTY TASK"),
                     }
-                    println!("---------------");
+                    //println!("---------------");
                 }
 
                 let mut status: WaitStatus = WaitStatus::Running;
@@ -469,47 +469,56 @@ mod run {
 
 mod wake {
     use std::{
-        ptr,
+        cell::RefCell,
         rc::Rc,
         task::{RawWaker, RawWakerVTable, Waker},
     };
 
     pub trait HackWake {
-        fn awake(rc_self: &Rc<Self>);
+        fn awake(rc_self: &Rc<RefCell<Self>>);
     }
 
-    pub fn hack_waker<T>(w: Rc<T>) -> Waker
+    pub fn hack_waker<T>(w: Rc<RefCell<T>>) -> Waker
     where
         T: HackWake + 'static,
     {
-        println!("+++++++++++>>>rc.strongcount10:{}", Rc::strong_count(&w));
+        //println!("+++++++++++>>>rc.strongcount10:{}", Rc::strong_count(&w));
         let p: *const () = Rc::into_raw(w).cast();
         //println!("+++++++++++>>>rc.strongcount11:{}", Rc::strong_count(&w));
-        let vtable = &RawWakerVTable::new(clone, wake, wake_by_ref, drop);
-        let raw_waker = RawWaker::new(p, vtable);
+
+        //let vtable = &RawWakerVTable::new(clone, wake::<T>, wake_by_ref, drop);
+        //let raw_waker = RawWaker::new(p, vtable);
+        let raw_waker = new_raw_waker::<T>(p);
+
         unsafe { Waker::from_raw(raw_waker) }
     }
 
-    unsafe fn clone(_: *const ()) -> RawWaker {
-        println!("**clone!");
-        new_raw_waker()
+    unsafe fn clone<T: HackWake>(raw: *const ()) -> RawWaker {
+        //println!("**clone!");
+        new_raw_waker::<T>(raw)
     }
 
-    unsafe fn wake(_: *const ()) {
-        println!("**wake!");
+    unsafe fn wake<T: HackWake>(raw_t: *const ()) {
+        let t = Rc::from_raw(raw_t as *const RefCell<T>);
+        HackWake::awake(&t);
+        //println!("**wake!");
     }
 
     unsafe fn wake_by_ref(_: *const ()) {
-        println!("**wake_by_ref!");
+        //println!("**wake_by_ref!");
     }
 
     unsafe fn drop(_: *const ()) {
-        println!("**drop!");
+        //println!("**drop!");
     }
 
-    static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, wake, wake_by_ref, drop);
+    //static VTABLE: RawWakerVTable =
+    //    RawWakerVTable::new::<T: HackWake>(clone, wake::<T>, wake_by_ref, drop);
 
-    fn new_raw_waker() -> RawWaker {
-        RawWaker::new(ptr::null(), &VTABLE)
+    fn new_raw_waker<T: HackWake>(raw: *const ()) -> RawWaker {
+        RawWaker::new(
+            raw,
+            &RawWakerVTable::new(clone::<T>, wake::<T>, wake_by_ref, drop),
+        )
     }
 }
