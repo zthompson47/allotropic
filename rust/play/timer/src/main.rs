@@ -252,8 +252,8 @@ mod wait {
 
                 if let Some(tw) = timer_waker {
                     if tw.0.deadline < Instant::now() {
-                        //tw.0.waker.wake();
-                        tw.0.waker.wake_by_ref();
+                        tw.0.waker.wake();
+                        //tw.0.waker.wake_by_ref();
                     } else {
                         self.timers.push(tw);
                     }
