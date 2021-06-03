@@ -361,12 +361,8 @@ mod run {
         queue_tx: channel::Sender<Rc<RefCell<Task>>>,
     }
 
-    impl HackWake for Task {
-        fn awake(rc_self: Rc<RefCell<Self>>) {
-            rc_self.borrow().queue_tx.send(rc_self.clone()).unwrap();
-        }
-
-        fn awake_by_ref(rc_self: &Rc<RefCell<Self>>) {
+    impl HackWake for RefCell<Task> {
+        fn awake_by_ref(rc_self: &Rc<Self>) {
             rc_self.borrow().queue_tx.send(rc_self.clone()).unwrap();
         }
     }
@@ -445,53 +441,104 @@ mod run {
 
 mod wake {
     use std::{
-        cell::RefCell,
+        mem::ManuallyDrop,
         rc::Rc,
         task::{RawWaker, RawWakerVTable, Waker},
     };
 
     pub trait HackWake {
-        fn awake(rc_self: Rc<RefCell<Self>>);
-        fn awake_by_ref(rc_self: &Rc<RefCell<Self>>);
+        fn awake(rc_self: Rc<Self>) {
+            Self::awake_by_ref(&rc_self)
+        }
+
+        fn awake_by_ref(rc_self: &Rc<Self>);
     }
 
-    pub fn hack_waker<T>(w: Rc<RefCell<T>>) -> Waker
+    pub fn hack_waker<T>(task: Rc<T>) -> Waker
     where
         T: HackWake + 'static,
     {
-        let p: *const () = Rc::into_raw(w).cast();
-        let raw_waker = new_raw_waker::<T>(p);
+        let raw_task: *const () = Rc::into_raw(task).cast();
+        let raw_waker = new_raw_waker::<T>(raw_task);
 
         unsafe { Waker::from_raw(raw_waker) }
     }
 
     unsafe fn clone<T: HackWake>(raw_task: *const ()) -> RawWaker {
-        println!("**clone!");
+        let task = ManuallyDrop::new(Rc::from_raw(raw_task as *const T));
+        let _task_ref = ManuallyDrop::new(task.clone());
+        // println!("**clone!");
         new_raw_waker::<T>(raw_task)
     }
 
     unsafe fn wake<T: HackWake>(raw_task: *const ()) {
-        let t = Rc::from_raw(raw_task as *const RefCell<T>);
-        println!("**wake!");
-        HackWake::awake(t);
+        let task = Rc::from_raw(raw_task as *const T);
+        // println!("**wake!");
+        HackWake::awake(task);
     }
 
     unsafe fn wake_by_ref<T: HackWake>(raw_task: *const ()) {
-        let t = Rc::from_raw(raw_task as *const RefCell<T>);
-        println!("**wake_by_ref!");
-        HackWake::awake_by_ref(&t);
+        let task = ManuallyDrop::new(Rc::from_raw(raw_task as *const T));
+        // println!("**wake_by_ref!");
+        HackWake::awake_by_ref(&task);
     }
 
     unsafe fn drop<T: HackWake>(raw_task: *const ()) {
-        let t = Rc::from_raw(raw_task as *const RefCell<T>);
-        std::mem::drop(t);
-        println!("**drop!");
+        let _ = Rc::from_raw(raw_task as *const T);
+        // println!("**drop!");
+        // std::mem::drop(task);
     }
 
-    fn new_raw_waker<T: HackWake>(raw: *const ()) -> RawWaker {
+    fn new_raw_waker<T: HackWake>(raw_task: *const ()) -> RawWaker {
         RawWaker::new(
-            raw,
+            raw_task,
             &RawWakerVTable::new(clone::<T>, wake::<T>, wake_by_ref::<T>, drop::<T>),
         )
+    }
+
+    mod tests {
+        use super::*;
+
+        struct Test(u8);
+
+        impl HackWake for Test {
+            fn awake_by_ref(_rc_self: &Rc<Self>) {}
+        }
+
+        #[test]
+        fn test_clone_refcounts() {
+            let test = Test(47);
+            let data = Rc::new(test);
+
+            let data_clone = data.clone();
+            let waker = hack_waker(data);
+            assert_eq!(Rc::strong_count(&data_clone), 2);
+
+            #[allow(clippy::redundant_clone)]
+            let waker_clone = waker.clone();
+            assert_eq!(Rc::strong_count(&data_clone), 3);
+
+            std::mem::drop(waker_clone);
+            assert_eq!(Rc::strong_count(&data_clone), 2);
+
+            waker.wake_by_ref();
+            assert_eq!(Rc::strong_count(&data_clone), 2);
+
+            waker.wake();
+            assert_eq!(Rc::strong_count(&data_clone), 1);
+        }
+
+        #[test]
+        fn test_drop_refcounts() {
+            let test = Test(47);
+            let data = Rc::new(test);
+
+            let data_clone = data.clone();
+            let waker = hack_waker(data);
+            assert_eq!(Rc::strong_count(&data_clone), 2);
+
+            std::mem::drop(waker);
+            assert_eq!(Rc::strong_count(&data_clone), 1);
+        }
     }
 }
