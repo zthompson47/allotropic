@@ -8,15 +8,15 @@ fn main() {
     let mut rt = Runner::new();
 
     let f1 = async {
-        for _ in 0..30 {
-            println!("f1");
+        for _ in 0..3 {
+            println!("_f1");
             sleep(Duration::from_millis(999)).await;
         }
         42
     };
 
     let f2 = async {
-        for _ in 0..90 {
+        for _ in 0..9 {
             println!("f2");
             sleep(Duration::from_millis(333)).await;
         }
@@ -27,6 +27,7 @@ fn main() {
         let mut buf = vec![0u8; 1024];
         let mut cmd = CmdReader::new(Command::new("cat").arg("named_pipe"));
 
+        //TODO: Read with timeout?
         while let Ok(len) = cmd.read(&mut buf).await {
             if len == 0 {
                 break;
@@ -35,21 +36,31 @@ fn main() {
         }
     };
 
-    rt.spawn(async move {
-        println!("{:?}", f1.await);
-        println!("f1 done");
+    let t1 = rt.spawn(async move {
+        println!("f1:{:?}", f1.await);
+        "t1"
     });
 
-    rt.spawn(async move {
-        println!("{:?}", f2.await);
+    /*
+    let t2 = rt.spawn(async move {
+        println!("->{:?}", f2.await);
         println!("f2 done");
+        22
     });
+    */
+    let t2 = rt.spawn(f2);
 
-    rt.spawn(async move {
+    let t3 = rt.spawn(async move {
         f3.await;
         println!("f3 done");
+        33.3
     });
 
+    rt.spawn(async move {
+        println!("t1:{}", t1.await);
+        println!("t2:{}", t2.await);
+        println!("t3:{}", t3.await);
+    });
     rt.run();
 }
 
@@ -243,6 +254,8 @@ mod wait {
             }
 
             if self.poll.poll(&mut self.events, timeout).is_ok() {
+                // TODO: still getting microsecond timeouts.. from not rounding up?
+                //println!("mio timeout:{:?}", timeout);
                 for event in self.events.iter() {
                     if self.readers.contains_key(&event.token()) {
                         self.readers.get(&event.token()).unwrap().clone().wake();
@@ -343,11 +356,10 @@ mod run {
         future::Future,
         pin::Pin,
         rc::Rc,
-        task::{Context, Poll},
+        task::{Context, Poll, Waker},
     };
 
     use crossbeam::channel;
-    use futures::channel::oneshot;
 
     use crate::wait::{WaitStatus, WAITER};
     use crate::wake::{hack_waker, HackWake};
@@ -357,8 +369,27 @@ mod run {
     }
 
     pub struct Task {
-        fut: Pin<Box<dyn Future<Output = ()> + Send + Sync>>,
+        fut: Pin<Box<dyn Future<Output = ()>>>,
         queue_tx: channel::Sender<Rc<RefCell<Task>>>,
+        th_waker: Option<Waker>,
+    }
+
+    impl Future for Task {
+        type Output = ();
+
+        fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<()> {
+            let me = &mut *self;
+
+            match me.fut.as_mut().poll(cx) {
+                Poll::Ready(()) => {
+                    if me.th_waker.is_some() {
+                        me.th_waker.as_ref().unwrap().wake_by_ref();
+                    }
+                    Poll::Ready(())
+                }
+                Poll::Pending => Poll::Pending,
+            }
+        }
     }
 
     impl HackWake for RefCell<Task> {
@@ -368,15 +399,23 @@ mod run {
     }
 
     pub struct TaskHandle<T> {
-        fut: Pin<Box<dyn Future<Output = T> + Send>>,
+        result: Rc<RefCell<Option<T>>>,
+        parent: Rc<RefCell<Task>>,
     }
 
     impl<T> Future for TaskHandle<T> {
         type Output = T;
 
-        fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<T> {
-            let me = &mut *self;
-            me.fut.as_mut().poll(cx)
+        fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<T> {
+            if self.result.borrow().is_some() {
+                Poll::Ready(self.result.take().unwrap())
+            } else {
+                self.parent
+                    .borrow_mut()
+                    .th_waker
+                    .replace(cx.waker().clone());
+                Poll::Pending
+            }
         }
     }
 
@@ -393,23 +432,25 @@ mod run {
 
         pub fn spawn<T, F>(&mut self, f: F) -> TaskHandle<T>
         where
-            T: Send + 'static,
-            F: Future<Output = T> + Send + Sync + 'static,
+            T: 'static,
+            F: Future<Output = T> + 'static,
         {
-            let (tx, rx) = oneshot::channel();
+            let result: Rc<RefCell<Option<T>>> = Rc::new(RefCell::new(None));
+            let r_clone = result.clone();
             let fut = async move {
-                let _ = tx.send(f.await);
+                *r_clone.borrow_mut() = Some(f.await);
             };
-
-            let task = Task {
+            let task = Rc::new(RefCell::new(Task {
                 fut: Box::pin(fut),
                 queue_tx: self.queue_tx.clone(),
-            };
+                th_waker: None,
+            }));
 
-            self.queue_tx.send(Rc::new(RefCell::new(task))).unwrap();
+            self.queue_tx.send(task.clone()).unwrap();
 
             TaskHandle {
-                fut: Box::pin(async move { rx.await.unwrap() }),
+                result,
+                parent: task,
             }
         }
 
@@ -419,7 +460,7 @@ mod run {
                     let waker = hack_waker(task.clone());
                     let mut context = Context::from_waker(&waker);
 
-                    match task.borrow_mut().fut.as_mut().poll(&mut context) {
+                    match Pin::new(&mut *task.borrow_mut()).poll(&mut context) {
                         Poll::Pending => {}
                         Poll::Ready(()) => {}
                     }
@@ -430,7 +471,6 @@ mod run {
                 WAITER.with(|waiter| {
                     status = waiter.borrow_mut().wait();
                 });
-
                 if status == WaitStatus::Done {
                     break;
                 }
@@ -467,26 +507,24 @@ mod wake {
     unsafe fn clone<T: HackWake>(raw_task: *const ()) -> RawWaker {
         let task = ManuallyDrop::new(Rc::from_raw(raw_task as *const T));
         let _task_ref = ManuallyDrop::new(task.clone());
-        // println!("**clone!");
+
         new_raw_waker::<T>(raw_task)
     }
 
     unsafe fn wake<T: HackWake>(raw_task: *const ()) {
         let task = Rc::from_raw(raw_task as *const T);
-        // println!("**wake!");
+
         HackWake::awake(task);
     }
 
     unsafe fn wake_by_ref<T: HackWake>(raw_task: *const ()) {
         let task = ManuallyDrop::new(Rc::from_raw(raw_task as *const T));
-        // println!("**wake_by_ref!");
+
         HackWake::awake_by_ref(&task);
     }
 
     unsafe fn drop<T: HackWake>(raw_task: *const ()) {
         let _ = Rc::from_raw(raw_task as *const T);
-        // println!("**drop!");
-        // std::mem::drop(task);
     }
 
     fn new_raw_waker<T: HackWake>(raw_task: *const ()) -> RawWaker {
