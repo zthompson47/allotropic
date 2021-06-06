@@ -253,6 +253,7 @@ mod wait {
                 timer_waker = Some(tw);
             }
 
+            // TODO: intermittently doesn't read from named_pipe..?
             if self.poll.poll(&mut self.events, timeout).is_ok() {
                 // TODO: still getting microsecond timeouts.. from not rounding up?
                 //println!("mio timeout:{:?}", timeout);
@@ -353,25 +354,20 @@ mod time {
 mod run {
     use std::{
         cell::RefCell,
+        collections::VecDeque,
         future::Future,
         pin::Pin,
         rc::Rc,
         task::{Context, Poll, Waker},
     };
 
-    use crossbeam::channel;
-
     use crate::wait::{WaitStatus, WAITER};
     use crate::wake::{hack_waker, HackWake};
 
-    thread_local! {
-        pub static RUNTIME: Option<RefCell<Runner>> = None;
-    }
-
     pub struct Task {
         fut: Pin<Box<dyn Future<Output = ()>>>,
-        queue_tx: channel::Sender<Rc<RefCell<Task>>>,
         th_waker: Option<Waker>,
+        queue: Rc<RefCell<VecDeque<Rc<RefCell<Task>>>>>,
     }
 
     impl Future for Task {
@@ -394,7 +390,7 @@ mod run {
 
     impl HackWake for RefCell<Task> {
         fn awake_by_ref(rc_self: &Rc<Self>) {
-            rc_self.borrow().queue_tx.send(rc_self.clone()).unwrap();
+            rc_self.borrow().queue.borrow_mut().push_back(rc_self.clone());
         }
     }
 
@@ -420,14 +416,14 @@ mod run {
     }
 
     pub struct Runner {
-        queue_rx: channel::Receiver<Rc<RefCell<Task>>>,
-        queue_tx: channel::Sender<Rc<RefCell<Task>>>,
+        queue: Rc<RefCell<VecDeque<Rc<RefCell<Task>>>>>,
     }
 
     impl Runner {
         pub fn new() -> Self {
-            let (queue_tx, queue_rx) = channel::unbounded();
-            Runner { queue_rx, queue_tx }
+            Runner {
+                queue: Rc::new(RefCell::new(VecDeque::new())),
+            }
         }
 
         pub fn spawn<T, F>(&mut self, f: F) -> TaskHandle<T>
@@ -442,11 +438,11 @@ mod run {
             };
             let task = Rc::new(RefCell::new(Task {
                 fut: Box::pin(fut),
-                queue_tx: self.queue_tx.clone(),
                 th_waker: None,
+                queue: self.queue.clone(),
             }));
 
-            self.queue_tx.send(task.clone()).unwrap();
+            self.queue.borrow_mut().push_back(task.clone());
 
             TaskHandle {
                 result,
@@ -456,13 +452,14 @@ mod run {
 
         pub fn run(self) {
             loop {
-                while let Some(task) = self.queue_rx.try_iter().next() {
-                    let waker = hack_waker(task.clone());
-                    let mut context = Context::from_waker(&waker);
+                let len = self.queue.borrow_mut().len();
+                for _ in 0..len {
+                    let task = self.queue.borrow_mut().pop_front();
+                    if let Some(task) = task {
+                        let waker = hack_waker(task.clone());
+                        let mut context = Context::from_waker(&waker);
 
-                    match Pin::new(&mut *task.borrow_mut()).poll(&mut context) {
-                        Poll::Pending => {}
-                        Poll::Ready(()) => {}
+                        let _ = Pin::new(&mut *task.borrow_mut()).poll(&mut context);
                     }
                 }
 
