@@ -36,8 +36,7 @@ fn main() {
         }
     };
 
-    let t1 = rt.spawn("t1", async move {
-        println!("ENTER T1");
+    let t1 = rt.spawn(async move {
         println!("f1:{:?}", f1.await);
         "t1"
     });
@@ -49,17 +48,15 @@ fn main() {
         22
     });
     */
-    let t2 = rt.spawn("t2", f2);
+    let t2 = rt.spawn(f2);
 
-    let t3 = rt.spawn("t3", async move {
-        println!("ENTER T3");
+    let t3 = rt.spawn(async move {
         f3.await;
         println!("f3 done");
         33.3
     });
 
-    rt.spawn("t4", async move {
-        println!("ENTER T4");
+    rt.spawn(async move {
         println!("t2:{}", t2.await);
         println!("t1:{}", t1.await);
         println!("t3:{}", t3.await);
@@ -372,26 +369,20 @@ mod run {
         fut: Pin<Box<dyn Future<Output = ()>>>,
         th_waker: Option<Waker>,
         queue: Rc<RefCell<VecDeque<Rc<RefCell<Task>>>>>,
-        name: String,
     }
 
     impl Future for Task {
         type Output = ();
 
         fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<()> {
-            println!("[{}]___POLLL_______TASK", self.name);
             match self.fut.as_mut().poll(cx) {
                 Poll::Ready(()) => {
-                    println!("[{}]POLLL__________TASK--->>>>>>READY!", self.name);
                     if self.th_waker.is_some() {
                         self.th_waker.as_ref().unwrap().wake_by_ref();
                     }
                     Poll::Ready(())
                 }
-                Poll::Pending => {
-                    println!("[{}]POLLL__________TASK--->>>>>>PENDING!", self.name);
-                    Poll::Pending
-                }
+                Poll::Pending => Poll::Pending,
             }
         }
     }
@@ -403,11 +394,6 @@ mod run {
                 .queue
                 .borrow_mut()
                 .push_back(rc_self.clone());
-            println!(
-                "\n*^*^*^*^*^*^*^*^*__{}__*^*^*^*{:?}^*^*^*^*",
-                rc_self.borrow().name,
-                rc_self.borrow().queue.borrow().len()
-            );
         }
     }
 
@@ -423,24 +409,9 @@ mod run {
         type Output = T;
 
         fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<T> {
-            println!(
-                "[TH__{}]--------->>poll::ENTER {:?}",
-                self.parent.borrow().name,
-                self.result
-            );
             if self.result.borrow().is_some() {
-                println!(
-                    "[TH__{}]--------->>poll::ready {:?}",
-                    self.parent.borrow().name,
-                    self.result
-                );
                 Poll::Ready(self.result.take().unwrap())
             } else {
-                println!(
-                    "TH__[{}]--------->>set th_waker {:?}",
-                    self.parent.borrow().name,
-                    self.result
-                );
                 self.parent
                     .borrow_mut()
                     .th_waker
@@ -461,7 +432,7 @@ mod run {
             }
         }
 
-        pub fn spawn<T, F>(&mut self, name: &str, f: F) -> TaskHandle<T>
+        pub fn spawn<T, F>(&mut self, f: F) -> TaskHandle<T>
         where
             T: 'static,
             F: Future<Output = T> + 'static,
@@ -471,12 +442,10 @@ mod run {
             let fut = async move {
                 *r_clone.borrow_mut() = Some(f.await);
             };
-            println!("NEW task...");
             let task = Rc::new(RefCell::new(Task {
                 fut: Box::pin(fut),
                 th_waker: None,
                 queue: self.queue.clone(),
-                name: name.to_string(),
             }));
 
             self.queue.borrow_mut().push_back(task.clone());
@@ -488,16 +457,12 @@ mod run {
         }
 
         pub fn run(self) {
-            println!("_START_RUN_");
             loop {
-
-
                 loop {
                     let len = self.queue.borrow().len();
                     if len == 0 {
                         break;
                     }
-                    println!("_IN_RUN_{}", len);
                     for _ in 0..len {
                         let task = self.queue.borrow_mut().pop_front();
                         if let Some(task) = task {
@@ -509,15 +474,10 @@ mod run {
                     }
                 }
 
-
-
-
                 let mut status: WaitStatus = WaitStatus::Running;
 
                 WAITER.with(|waiter| {
-                    println!("BEFORE_WAIT {}", self.queue.borrow().len());
                     status = waiter.borrow_mut().wait();
-                    println!("AFTER_WAIT {}", self.queue.borrow().len());
                 });
                 if status == WaitStatus::Done {
                     break;
@@ -563,7 +523,6 @@ mod wake {
     }
 
     unsafe fn wake_by_ref<T: HackWake>(raw_task: *const ()) {
-        println!("******wake_by_ref**************");
         let task = ManuallyDrop::new(Rc::from_raw(raw_task as *const T));
         HackWake::awake_by_ref(&task);
     }
