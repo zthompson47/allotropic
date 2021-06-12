@@ -10,5 +10,20 @@ async fn main() {
     let longitude: f64 = -76.52462385924595;
     let mut client = ApiClient::new(API, APP, USER).unwrap();
     let point = client.get_point(vec![latitude, longitude]).await.unwrap();
-    println!("{:#?}", point);
+    let forecast = client
+        .get_forecast_from_url(point.properties.forecast_hourly)
+        .await
+        .unwrap();
+    for period in forecast.properties.periods {
+        println!("{}", period.start_time);
+        println!(
+            "{}{}, {} {}, {}",
+            period.temperature,
+            period.temperature_unit,
+            period.wind_speed,
+            period.wind_direction,
+            period.short_forecast
+        );
+    }
+    //println!("{:#?}", forecast);
 }

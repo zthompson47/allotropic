@@ -1,5 +1,3 @@
-mod common;
-
 use wiremock::{
     matchers::{method, path},
     Mock, MockServer, ResponseTemplate,
@@ -7,6 +5,7 @@ use wiremock::{
 
 use weather::client::{round_fmt, ApiClient};
 
+mod common;
 use common::{json, API, APP, USER};
 
 #[tokio::test]

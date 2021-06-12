@@ -1,5 +1,8 @@
+#[allow(dead_code)]
 pub const API: &str = "https://mock.api";
+#[allow(dead_code)]
 pub const APP: &str = "test.app";
+#[allow(dead_code)]
 pub const USER: &str = "user@test.app";
 
 pub fn json(file: &str) -> String {

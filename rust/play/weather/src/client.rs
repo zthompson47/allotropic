@@ -4,6 +4,7 @@ use reqwest::Client;
 
 use crate::{
     error::Result,
+    forecast::Forecast,
     location::Point,
     types::{Position, Url},
 };
@@ -54,6 +55,12 @@ impl ApiClient {
     #[allow(clippy::ptr_arg)]
     fn fetch_cached_json(&self, request: &Url) -> Option<&String> {
         self.cache.get(request)
+    }
+
+    pub async fn get_forecast_from_url(&self, url: String) -> Result<Forecast> {
+        let response = self.client.get(&url).send().await?;
+        let text = response.text().await?;
+        Ok(serde_json::from_str(&text)?)
     }
 }
 

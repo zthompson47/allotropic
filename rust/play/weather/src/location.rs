@@ -1,6 +1,7 @@
+use geojson::Geometry;
 use serde::Deserialize;
 
-use crate::types::{Geometry, Quantity, Url};
+use crate::types::{Quantity, Url};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
