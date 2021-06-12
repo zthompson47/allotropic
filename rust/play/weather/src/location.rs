@@ -1,46 +1,46 @@
-#![allow(dead_code)]
-#![allow(unused_variables)]
+//#![allow(dead_code)]
+//#![allow(unused_variables)]
 use std::collections::HashMap;
 
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use crate::error::Result;
 
-type Url = String;
+pub type Url = String;
 type Position = Vec<f64>;
 
-const API: &str = "https://api.weather.gov";
-const APP: &str = "weather.allotropic.com";
-const USER: &str = "zach@allotropic.com";
+pub const API: &str = "https://api.weather.gov";
+pub const APP: &str = "weather.allotropic.com";
+pub const USER: &str = "zach@allotropic.com";
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct Point {
+pub struct Point {
     id: String,
     geometry: Geometry,
     properties: PointProperties,
 }
 
 #[derive(Debug)]
-struct ApiClient {
+pub struct ApiClient {
     cache: HashMap<Url, String>,
     client: Client,
     endpoint: Url,
 }
 
 impl ApiClient {
-    fn new(app: &str, user: &str) -> Result<Self> {
+    pub fn new(api: &str, app: &str, user: &str) -> Result<Self> {
         Ok(ApiClient {
             cache: HashMap::new(),
             client: Client::builder()
                 .user_agent(format!("({}, {})", app, user))
                 .build()?,
-            endpoint: API.into(),
+            endpoint: api.into(),
         })
     }
 
-    async fn get_point(&mut self, coordinates: Position) -> Result<Point> {
+    pub async fn get_point(&mut self, coordinates: Position) -> Result<Point> {
         let coords = format!(
             "{},{}",
             round_fmt(coordinates[0], 4),
@@ -55,6 +55,7 @@ impl ApiClient {
             None => {
                 let response = self.client.get(&url).send().await?;
                 let text = response.text().await?;
+                //println!("---------->>>{}<<<<<<<<<<---------", text);
                 self.cache.insert(url.clone(), text);
                 self.cache.get(&url).unwrap()
             }
@@ -76,13 +77,15 @@ fn round_fmt(f: f64, digits: u32) -> String {
     format!("{0:.1$}", f, digits as usize)
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct Geometry {
+pub struct Geometry {
+    #[serde(rename = "type")]
+    type_of: String, // TODO: should be enum
     coordinates: Position,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PointProperties {
     #[serde(rename = "@id")]
@@ -104,14 +107,14 @@ struct PointProperties {
     radar_station: String,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RelativeLocation {
     geometry: Geometry,
     properties: RelativeLocationProperties,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RelativeLocationProperties {
     city: String,
@@ -120,9 +123,9 @@ struct RelativeLocationProperties {
     bearing: Quantity,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct Quantity {
+pub struct Quantity {
     value: f32,
     unit_code: String,
 }
@@ -131,14 +134,24 @@ struct Quantity {
 mod tests {
     use super::*;
 
+    use wiremock::{
+        matchers::{method, path},
+        Mock, MockServer, ResponseTemplate,
+    };
+
     #[tokio::test]
-    async fn get_point() {
+    async fn get_point_from_cache() {
+        // The place
         let latitude: f64 = 42.44645644561855;
         let longitude: f64 = -76.4807390759812;
+
+        // Create cached response
         let coords = format!("{},{}", round_fmt(latitude, 4), round_fmt(longitude, 4));
         let url = format!("{}/points/{}", API, coords);
-        let mut client = ApiClient::new(APP, USER).unwrap();
+        let mut client = ApiClient::new(API, APP, USER).unwrap();
         client.cache.insert(url.clone(), JSON.to_string());
+
+        // Run request on cached response
         let point = client.get_point(vec![latitude, longitude]).await.unwrap();
         assert_eq!(point.id, url);
         assert_eq!(
@@ -155,13 +168,42 @@ mod tests {
             id: String,
         }
         let t: Test = serde_json::from_str(JSON).unwrap();
-        //println!("{:#?}", t);
-        //panic!()
         assert_ne!(t.id, "");
     }
 
-    const JSON: &str = r#"
-{
+    #[tokio::test]
+    async fn mock_get_point() {
+        let mock_server = MockServer::start().await;
+        let response = ResponseTemplate::new(200)
+            .set_body_string(JSON)
+            .insert_header("content-type", "application/geo+json");
+
+        Mock::given(method("GET"))
+            .and(path("/points/42.4465,-76.4807"))
+            .respond_with(response)
+            .mount(&mock_server)
+            .await;
+
+        let body = reqwest::get(format!("{}{}", &mock_server.uri(), "/points/"))
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+
+        let latitude: f64 = 42.44645644561855;
+        let longitude: f64 = -76.4807390759812;
+        let mut client = ApiClient::new(&mock_server.uri(), APP, USER).unwrap();
+        let point = client.get_point(vec![latitude, longitude]).await.unwrap();
+
+        assert_eq!(
+            point.properties.relative_location.properties.city,
+            "Forest Home"
+        );
+        assert_eq!((44, 69), (point.properties.grid_x, point.properties.grid_y));
+    }
+
+    const JSON: &str = r#"{
     "@context": [
         "https://geojson.org/geojson-ld/geojson-context.jsonld",
         {
@@ -254,6 +296,5 @@ mod tests {
         "timeZone": "America/New_York",
         "radarStation": "KBGM"
     }
-}
-"#;
+}"#;
 }

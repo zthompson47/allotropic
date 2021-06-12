@@ -1,9 +1,20 @@
 use reqwest::Client;
 
-// use weather::location;
+use weather::error::Result;
+use weather::location::{API, APP, USER, ApiClient};
 
 #[tokio::main(flavor = "current_thread")]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> Result<()> {
+    let latitude: f64 = 42.440932990492946;
+    let longitude: f64 = -76.52462385924595;
+    let mut client = ApiClient::new(API, APP, USER)?; // TODO: ApiClient::default
+    let point = client.get_point(vec![latitude, longitude]).await?;
+    println!("{:#?}", point);
+    Ok(())
+}
+
+#[tokio::main(flavor = "current_thread")]
+async fn _old_main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let api = "https://api.weather.gov";
 
     let latitude: f64 = 42.440932990492946;
@@ -22,6 +33,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+#[allow(dead_code)]
 fn round_fmt(f: f64, digits: u32) -> String {
     let pow = 10u32.pow(digits) as f64;
     let f = (f * pow).round() / pow;
