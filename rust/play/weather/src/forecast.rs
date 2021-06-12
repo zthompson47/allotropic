@@ -2,7 +2,7 @@ use chrono::{offset::Local, DateTime};
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::location::{Geometry, Quantity, Url};
+use crate::types::{Geometry, Quantity, Url};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -44,4 +44,9 @@ struct Period {
     icon: Url,
     short_forecast: String,
     detailed_forecast: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GridpointData {
 }
