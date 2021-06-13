@@ -9,9 +9,12 @@ use crate::{
     types::{Position, Url},
 };
 
+/// Endpoint for the National Weather Service API.
 pub const API: &str = "https://api.weather.gov";
 
 #[derive(Debug)]
+/// The client for the NWS-API. All weather forecat resources are acquired
+/// through this client.
 pub struct ApiClient {
     pub cache: HashMap<Url, String>, // TODO: pub only for testing
     client: Client,
@@ -19,6 +22,7 @@ pub struct ApiClient {
 }
 
 impl ApiClient {
+    /// Create a new client from an endpoint and user credentials.
     pub fn new(api: &str, app: &str, user: &str) -> Result<Self> {
         Ok(ApiClient {
             cache: HashMap::new(),
@@ -29,12 +33,15 @@ impl ApiClient {
         })
     }
 
+    /// Translate a latitude and longitude into a gridpoint location in order
+    /// to generate weather forecast requests.
     pub async fn get_point(&mut self, coordinates: Position) -> Result<Point> {
         let coords = format!(
             "{},{}",
             round_fmt(coordinates[0], 4),
             round_fmt(coordinates[1], 4)
         );
+
         let url = format!("{}/points/{}", self.endpoint, coords);
         let json = match self.fetch_cached_json(&url) {
             Some(ref json) => {
@@ -57,6 +64,7 @@ impl ApiClient {
         self.cache.get(request)
     }
 
+    /// Fetch a weather forecast from a given url.
     pub async fn get_forecast_from_url(&self, url: String) -> Result<Forecast> {
         let response = self.client.get(&url).send().await?;
         let text = response.text().await?;
@@ -64,6 +72,9 @@ impl ApiClient {
     }
 }
 
+/// Round a floating point number to a specified number of significant digits.
+/// Used to generate latitude and longitude coordinates with four significant
+/// digits for NWS-API requests.
 pub fn round_fmt(f: f64, digits: u32) -> String {
     let pow = 10u32.pow(digits) as f64;
     let f = (f * pow).round() / pow;
