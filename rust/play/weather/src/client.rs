@@ -1,8 +1,11 @@
-use std::collections::HashMap;
+//use std::collections::HashMap;
 
-use reqwest::Client;
+use chrono::Utc;
+use reqwest::{Client, IntoUrl};
+use rusqlite::ToSql;
 
 use crate::{
+    cache::Cache,
     error::Result,
     forecast::Forecast,
     location::Point,
@@ -16,7 +19,7 @@ pub const API: &str = "https://api.weather.gov";
 /// The client for the NWS-API. All weather forecat resources are acquired
 /// through this client.
 pub struct ApiClient {
-    pub cache: HashMap<Url, String>, // TODO: pub only for testing
+    cache: Cache,
     client: Client,
     endpoint: Url,
 }
@@ -25,7 +28,7 @@ impl ApiClient {
     /// Create a new client from an endpoint and user credentials.
     pub fn new(api: &str, app: &str, user: &str) -> Result<Self> {
         Ok(ApiClient {
-            cache: HashMap::new(),
+            cache: Cache::new()?,
             client: Client::builder()
                 .user_agent(format!("({}, {})", app, user))
                 .build()?,
@@ -41,34 +44,32 @@ impl ApiClient {
             round_fmt(coordinates[0], 4),
             round_fmt(coordinates[1], 4)
         );
-
         let url = format!("{}/points/{}", self.endpoint, coords);
-        let json = match self.fetch_cached_json(&url) {
-            Some(ref json) => {
-                println!("CACHE HIT!!!!!!!!!!");
-                *json
-            }
-            None => {
-                let response = self.client.get(&url).send().await?;
-                let text = response.text().await?;
-                self.cache.insert(url.clone(), text);
-                self.cache.get(&url).unwrap()
-            }
-        };
+        let json = self.fetch_resource(&url).await?;
 
-        Ok(serde_json::from_str(json)?)
+        Ok(serde_json::from_str(&json)?)
     }
 
-    #[allow(clippy::ptr_arg)]
-    fn fetch_cached_json(&self, request: &Url) -> Option<&String> {
-        self.cache.get(request)
+    async fn fetch_resource<'a, T>(&mut self, url: &'a T) -> Result<String>
+    where
+        T: AsRef<str> + ToSql,
+        &'a T: IntoUrl,
+    {
+        match self.cache.get(url)? {
+            Some(entry) => Ok(entry.content),
+            None => {
+                let response = self.client.get(url).send().await?;
+                let text = response.text().await?;
+                self.cache.insert(url, 888, Utc::now(), &text)?;
+                Ok(text)
+            }
+        }
     }
 
     /// Fetch a weather forecast from a given url.
-    pub async fn get_forecast_from_url(&self, url: String) -> Result<Forecast> {
-        let response = self.client.get(&url).send().await?;
-        let text = response.text().await?;
-        Ok(serde_json::from_str(&text)?)
+    pub async fn get_forecast_from_url(&mut self, url: String) -> Result<Forecast> {
+        let json = self.fetch_resource(&url).await?;
+        Ok(serde_json::from_str(&json)?)
     }
 }
 

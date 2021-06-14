@@ -33,6 +33,7 @@ async fn get_point() {
     assert_eq!((44, 69), (point.properties.grid_x, point.properties.grid_y));
 }
 
+/*
 #[tokio::test]
 async fn get_point_from_cache() {
     // The place
@@ -58,3 +59,4 @@ async fn get_point_from_cache() {
     );
     assert_eq!((44, 69), (point.properties.grid_x, point.properties.grid_y));
 }
+*/

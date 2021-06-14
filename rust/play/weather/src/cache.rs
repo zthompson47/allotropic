@@ -1,31 +1,33 @@
 #![allow(dead_code, unused_variables)]
-use std::{env, fs, path::PathBuf};
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+};
 
-use chrono::{DateTime, Local, Utc};
-use rusqlite::{params, Connection};
+use chrono::{DateTime, Utc};
+use rusqlite::{named_params, Connection, ToSql};
 
 use crate::{
     error::{err, Result},
-    types::Url,
     APP_NAME,
 };
 
+#[derive(Debug)]
 pub struct Cache {
     conn: Connection,
 }
 
 impl Cache {
-    /// Connect to a database and return a handle to perform
-    /// caching operations.
+    /// Connect to a database and return a handle to perform caching
+    /// operations.
     pub fn new() -> Result<Self> {
-        // Set database path via environment variable
-        let mut env_dir = APP_NAME.to_uppercase();
-        env_dir.push_str("_DB");
+        Self::with_base_dir(None)
+    }
 
-        // Find the filesystem location of the database
-        let db_path = match env::var(&env_dir) {
-            Ok(dir) => PathBuf::from(dir),
-            Err(_) => match env::var("XDG_DATA_HOME") {
+    fn with_base_dir(base_dir: Option<&Path>) -> Result<Self> {
+        let db_path = match base_dir {
+            Some(dir) => PathBuf::from(dir),
+            None => match env::var("XDG_DATA_HOME") {
                 Ok(dir) => PathBuf::from(dir).join(APP_NAME),
                 Err(_) => match env::var("HOME") {
                     Ok(dir) => PathBuf::from(dir)
@@ -37,14 +39,14 @@ impl Cache {
             },
         };
 
-        // Make sure the directory exists for a new database
+        // Make sure the database directory exists
         let db_path = match fs::create_dir_all(&db_path) {
             Ok(_) => Some(db_path),
             Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => Some(db_path),
             Err(_) => None,
         };
 
-        // Open the database, creating a new one if needed
+        // Open the database, which creates a new db file if needed
         let conn = match db_path {
             Some(mut db_path) => {
                 db_path = db_path.join(APP_NAME);
@@ -62,8 +64,10 @@ impl Cache {
         Ok(Self { conn })
     }
 
-    #[allow(clippy::ptr_arg)]
-    fn get(&self, url: &Url) -> Result<Option<CacheEntry>> {
+    pub fn get<T>(&self, url: T) -> Result<Option<CacheEntry>>
+    where
+        T: AsRef<str> + ToSql,
+    {
         let mut stmt = self.conn.prepare(
             "select url, created_at, max_age, last_modified, content
              from cache where url = ?",
@@ -78,35 +82,39 @@ impl Cache {
             })
         })?;
 
-        Ok(Some(rows.next().unwrap().unwrap()))
+        if let Some(row) = rows.next() {
+            let row = row?;
+            Ok(Some(row))
+        } else {
+            Ok(None)
+        }
     }
 
-    #[allow(clippy::ptr_arg)]
-    fn insert(
+    pub fn insert<T>(
         &mut self,
-        url: &Url,
+        url: T,
         max_age: u32,
         last_modified: DateTime<Utc>,
         content: &str,
-    ) -> Result<()> {
+    ) -> Result<()>
+    where
+        T: AsRef<str> + ToSql,
+    {
         let sql = "\
             insert into cache(url, created_at, max_age, last_modified, content)
-            values(?, ?, ?, ?, ?)
+            values(:url, :created_at, :max_age, :last_modified, :content)
             on conflict(url) do update set
-            created_at=?, max_age=?, last_modified=?, content=?";
+                created_at=:create_at, max_age=:max_age,
+                last_modified=:last_modified, content=:content";
         self.conn.execute(
             sql,
-            params![
-                url,
-                Local::now(),
-                42,
-                Local::now(),
-                "jello",
-                Local::now(),
-                42,
-                Local::now(),
-                "jello"
-            ],
+            named_params! {
+                ":url": url,
+                ":created_at": Utc::now(),
+                ":max_age": max_age,
+                ":last_modified": last_modified,
+                ":content": content,
+            },
         )?;
 
         Ok(())
@@ -124,68 +132,61 @@ impl Cache {
 }
 
 fn init_db(conn: &Connection) -> Result<()> {
-    // TODO: maybe could use Connection::execute_batch
-    for sql in &[
-        "create table cache(
+    conn.execute_batch(
+        "\
+        create table cache(
             url text unique,
             created_at datetime,
             max_age int,
             last_modified datetime,
-            content text
-        )",
-        "create table version(id int)",
-        "insert into version values(1)",
-    ] {
-        conn.execute(sql, [])?;
-    }
+            content text);
+        create table version(id int);
+        insert into version values(1);
+        ",
+    )?;
+
     Ok(())
 }
 
-struct CacheEntry {
+pub struct CacheEntry {
     url: String,
     created_at: DateTime<Utc>,
     max_age: u32,
     last_modified: DateTime<Utc>,
-    content: String,
+    pub content: String,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    use tempfile::tempdir;
+    use tempfile::{tempdir, TempDir};
 
-    fn tempcache() -> (Cache, PathBuf) {
-        // Override db location with tempdir
-        let env_name = format!("{}_DB", APP_NAME.to_uppercase());
-        let db_dir = tempdir().unwrap().into_path();
-        println!("==============>>>{:?}<<<==============", db_dir);
-
-        // TODO: if the var is already set, it silently doesn't set it again..?
-        env::remove_var(&env_name);
-        env::set_var(&env_name, &db_dir);
+    fn tempcache() -> (Cache, TempDir) {
+        let temp_dir = tempdir().unwrap();
 
         // Cache should create new database with version = 1
-        let cache = Cache::new().unwrap();
+        let cache = Cache::with_base_dir(Some(temp_dir.path())).unwrap();
         assert_eq!(cache.db_version().unwrap(), 1);
 
-        (cache, db_dir)
+        (cache, temp_dir)
     }
 
     #[test]
     fn cache_works() {
-        let (mut cache, _) = tempcache();
+        let (mut cache, _temp_dir) = tempcache();
         cache
-            .insert(&"mock.url".to_string(), 880, Utc::now(), "content")
+            .insert("mock.url", 880, Utc::now(), "content")
             .unwrap();
 
-        let cached_page = cache.get(&"mock.url".to_string()).unwrap().unwrap();
+        let cached_page = cache.get("mock.url").unwrap().unwrap();
         assert_eq!(cached_page.url, "mock.url".to_string());
     }
 
     #[test]
-    fn init_db() {
-        let (cache, mut db_path) = tempcache();
+    fn db_initializes() {
+        let (cache, temp_dir) = tempcache();
+        let mut db_path = PathBuf::from(temp_dir.path());
 
         // Confirm full database path
         db_path = db_path.join(APP_NAME);
@@ -207,7 +208,7 @@ mod tests {
 
         // Create a new instance of `Cache` to make sure it can reuse the database
         conn.execute("update version set id = ?", [2]).unwrap();
-        let cache = Cache::new().unwrap();
+        let cache = Cache::with_base_dir(Some(temp_dir.path())).unwrap();
         assert_eq!(cache.db_version().unwrap(), 2);
     }
 }
