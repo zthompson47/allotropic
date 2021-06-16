@@ -17,6 +17,15 @@ pub struct Cache {
     conn: Connection,
 }
 
+#[derive(Debug)]
+pub struct CacheEntry {
+    url: String,
+    pub created_at: DateTime<Utc>,
+    pub max_age: Option<u32>,
+    last_modified: DateTime<Utc>,
+    pub content: String,
+}
+
 impl Cache {
     /// Connect to a database and return a handle to perform caching
     /// operations.
@@ -93,7 +102,7 @@ impl Cache {
     pub fn insert<T>(
         &mut self,
         url: T,
-        max_age: u32,
+        max_age: Option<u32>,
         last_modified: DateTime<Utc>,
         content: &str,
     ) -> Result<()>
@@ -104,7 +113,7 @@ impl Cache {
             insert into cache(url, created_at, max_age, last_modified, content)
             values(:url, :created_at, :max_age, :last_modified, :content)
             on conflict(url) do update set
-                created_at=:create_at, max_age=:max_age,
+                created_at=:created_at, max_age=:max_age,
                 last_modified=:last_modified, content=:content";
         self.conn.execute(
             sql,
@@ -148,20 +157,13 @@ fn init_db(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-pub struct CacheEntry {
-    url: String,
-    created_at: DateTime<Utc>,
-    max_age: u32,
-    last_modified: DateTime<Utc>,
-    pub content: String,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     use tempfile::{tempdir, TempDir};
 
+    /// Create a cache database in a temporary directory for testing.
     fn tempcache() -> (Cache, TempDir) {
         let temp_dir = tempdir().unwrap();
 
@@ -176,7 +178,7 @@ mod tests {
     fn cache_works() {
         let (mut cache, _temp_dir) = tempcache();
         cache
-            .insert("mock.url", 880, Utc::now(), "content")
+            .insert("mock.url", Some(888), Utc::now(), "content")
             .unwrap();
 
         let cached_page = cache.get("mock.url").unwrap().unwrap();
@@ -185,7 +187,7 @@ mod tests {
 
     #[test]
     fn db_initializes() {
-        let (cache, temp_dir) = tempcache();
+        let (_cache, temp_dir) = tempcache();
         let mut db_path = PathBuf::from(temp_dir.path());
 
         // Confirm full database path
@@ -210,5 +212,24 @@ mod tests {
         conn.execute("update version set id = ?", [2]).unwrap();
         let cache = Cache::with_base_dir(Some(temp_dir.path())).unwrap();
         assert_eq!(cache.db_version().unwrap(), 2);
+    }
+
+    #[test]
+    fn max_age_works() {
+        let (mut cache, _temp_dir) = tempcache();
+
+        // With max-age
+        cache
+            .insert("url_888", Some(888), Utc::now(), "content")
+            .unwrap();
+        let cached_page = cache.get("url_888").unwrap().unwrap();
+        assert_eq!(Some(888), cached_page.max_age);
+
+        // Without max-age
+        cache
+            .insert("url_None", None, Utc::now(), "content")
+            .unwrap();
+        let cached_page = cache.get("url_None").unwrap().unwrap();
+        assert_eq!(None, cached_page.max_age);
     }
 }

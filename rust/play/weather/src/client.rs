@@ -1,7 +1,7 @@
 //use std::collections::HashMap;
 
-use chrono::Utc;
-use reqwest::{Client, IntoUrl};
+use chrono::{Duration, Utc};
+use reqwest::{header::CACHE_CONTROL, Client, IntoUrl};
 use rusqlite::ToSql;
 
 use crate::{
@@ -21,18 +21,18 @@ pub const API: &str = "https://api.weather.gov";
 pub struct ApiClient {
     cache: Cache,
     client: Client,
-    endpoint: Url,
+    base_url: Url,
 }
 
 impl ApiClient {
-    /// Create a new client from an endpoint and user credentials.
-    pub fn new(api: &str, app: &str, user: &str) -> Result<Self> {
+    /// Create a new client from a url and user credentials.
+    pub fn new(base_url: &str, app: &str, user: &str) -> Result<Self> {
         Ok(ApiClient {
             cache: Cache::new()?,
             client: Client::builder()
                 .user_agent(format!("({}, {})", app, user))
                 .build()?,
-            endpoint: api.into(),
+            base_url: base_url.into(),
         })
     }
 
@@ -44,7 +44,7 @@ impl ApiClient {
             round_fmt(coordinates[0], 4),
             round_fmt(coordinates[1], 4)
         );
-        let url = format!("{}/points/{}", self.endpoint, coords);
+        let url = format!("{}/points/{}", self.base_url, coords);
         let json = self.fetch_resource(&url).await?;
 
         Ok(serde_json::from_str(&json)?)
@@ -56,14 +56,46 @@ impl ApiClient {
         &'a T: IntoUrl,
     {
         match self.cache.get(url)? {
-            Some(entry) => Ok(entry.content),
-            None => {
-                let response = self.client.get(url).send().await?;
-                let text = response.text().await?;
-                self.cache.insert(url, 888, Utc::now(), &text)?;
-                Ok(text)
+            Some(entry) => {
+                let max_age = entry.max_age.unwrap_or(0);
+                let expires_at = entry.created_at + Duration::seconds(max_age as i64);
+                if expires_at <= Utc::now() {
+                    // TODO: check last_modified for updated resource
+                    Ok(self.get_and_cache(url).await?)
+                } else {
+                    Ok(entry.content)
+                }
+            }
+            None => Ok(self.get_and_cache(url).await?),
+        }
+    }
+
+    async fn get_and_cache<'a, T>(&mut self, url: &'a T) -> Result<String>
+    where
+        T: AsRef<str> + ToSql,
+        &'a T: IntoUrl,
+    {
+        let response = self.client.get(url).send().await?;
+        let mut max_age = None;
+        if let Some(cache_control) = response.headers().get(CACHE_CONTROL) {
+            if let Ok(cache_control) = cache_control.to_str() {
+                for mut part in cache_control.split(',') {
+                    part = part.trim();
+                    if part.starts_with("max-age") {
+                        if let Some((_, v)) = part.split_once('=') {
+                            if let Ok(v) = v.parse::<u32>() {
+                                max_age = Some(v);
+                                break;
+                            }
+                        }
+                    }
+                }
             }
         }
+
+        let text = response.text().await?;
+        self.cache.insert(url, max_age, Utc::now(), &text)?;
+        Ok(text)
     }
 
     /// Fetch a weather forecast from a given url.

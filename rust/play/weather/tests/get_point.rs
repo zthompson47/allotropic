@@ -3,10 +3,10 @@ use wiremock::{
     Mock, MockServer, ResponseTemplate,
 };
 
-use weather::client::{round_fmt, ApiClient};
+use weather::client::ApiClient;
 
 mod common;
-use common::{json, API, APP, USER};
+use common::{json, APP, USER};
 
 #[tokio::test]
 async fn get_point() {
@@ -32,31 +32,3 @@ async fn get_point() {
     );
     assert_eq!((44, 69), (point.properties.grid_x, point.properties.grid_y));
 }
-
-/*
-#[tokio::test]
-async fn get_point_from_cache() {
-    // The place
-    let latitude: f64 = 42.44645644561855;
-    let longitude: f64 = -76.4807390759812;
-
-    // Credentials
-    let app = "test.app";
-    let user = "user@test.app";
-
-    // Create cached response
-    let coords = format!("{},{}", round_fmt(latitude, 4), round_fmt(longitude, 4));
-    let url = format!("{}/points/{}", API, coords);
-    let mut client = ApiClient::new(API, app, user).unwrap();
-    client.cache.insert(url.clone(), json("get_point"));
-
-    // Run request on cached response
-    let point = client.get_point(vec![latitude, longitude]).await.unwrap();
-    assert_eq!(point.id, url);
-    assert_eq!(
-        point.properties.relative_location.properties.city,
-        "Forest Home"
-    );
-    assert_eq!((44, 69), (point.properties.grid_x, point.properties.grid_y));
-}
-*/
