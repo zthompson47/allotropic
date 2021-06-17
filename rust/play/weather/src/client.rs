@@ -81,7 +81,7 @@ impl ApiClient {
             if let Ok(cache_control) = cache_control.to_str() {
                 for mut part in cache_control.split(',') {
                     part = part.trim();
-                    if part.starts_with("max-age") {
+                    if part.starts_with("max-age") { // max-age= and then unwrap splitonece..
                         if let Some((_, v)) = part.split_once('=') {
                             if let Ok(v) = v.parse::<u32>() {
                                 max_age = Some(v);
