@@ -1,8 +1,10 @@
 pub mod cache;
 pub mod client;
+pub mod config;
 pub mod error;
 pub mod forecast;
 pub mod location;
 pub mod types;
 
-const APP_NAME: &str = "wthr";
+pub const APP: &str = "wthr";
+pub const NWS_API: &str = "https://api.weather.gov";

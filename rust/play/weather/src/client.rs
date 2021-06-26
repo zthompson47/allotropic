@@ -1,4 +1,4 @@
-//use std::collections::HashMap;
+use std::{fmt::Display, path::PathBuf};
 
 use chrono::{Duration, Utc};
 use reqwest::{header::CACHE_CONTROL, Client, IntoUrl};
@@ -6,13 +6,13 @@ use rusqlite::ToSql;
 
 use crate::{
     cache::Cache,
-    error::Result,
+    error::{err, Result},
     forecast::Forecast,
     location::Point,
     types::{Position, Url},
 };
 
-/// Endpoint for the National Weather Service API.
+/// Base URL for the National Weather Service API.
 pub const API: &str = "https://api.weather.gov";
 
 #[derive(Debug)]
@@ -24,16 +24,44 @@ pub struct ApiClient {
     base_url: Url,
 }
 
-impl ApiClient {
-    /// Create a new client from a url and user credentials.
-    pub fn new(base_url: &str, app: &str, user: &str) -> Result<Self> {
+#[derive(Debug, Default)]
+pub struct ApiClientBuilder {
+    cache_base_dir: Option<PathBuf>,
+    api_key: Option<String>,
+    api_base_url: Option<Url>,
+}
+
+impl ApiClientBuilder {
+    pub fn build(self) -> Result<ApiClient> {
         Ok(ApiClient {
-            cache: Cache::new()?,
+            cache: Cache::with_base_dir(self.cache_base_dir)?,
             client: Client::builder()
-                .user_agent(format!("({}, {})", app, user))
+                .user_agent(self.api_key.unwrap())
                 .build()?,
-            base_url: base_url.into(),
+            base_url: self.api_base_url.unwrap(),
         })
+    }
+
+    pub fn cache_base_dir(mut self, path: PathBuf) -> Self {
+        self.cache_base_dir = Some(path);
+        self
+    }
+
+    pub fn api_key(mut self, domain: &str, email: &str) -> Self {
+        self.api_key = Some(format!("({}, {})", domain, email));
+        self
+    }
+
+    pub fn base_url(mut self, url: &str) -> Self {
+        self.api_base_url = Some(url.into());
+        self
+    }
+}
+
+impl ApiClient {
+    /// Create a builder to construct a new `ApiClient`.
+    pub fn builder() -> ApiClientBuilder {
+        ApiClientBuilder::default()
     }
 
     /// Translate a latitude and longitude into a gridpoint location in order
@@ -50,9 +78,16 @@ impl ApiClient {
         Ok(serde_json::from_str(&json)?)
     }
 
+    /// Fetch a weather forecast from a given url, for different time
+    /// resolutions.
+    pub async fn get_forecast_from_url(&mut self, url: String) -> Result<Forecast> {
+        let json = self.fetch_resource(&url).await?;
+        Ok(serde_json::from_str(&json)?)
+    }
+
     async fn fetch_resource<'a, T>(&mut self, url: &'a T) -> Result<String>
     where
-        T: AsRef<str> + ToSql,
+        T: AsRef<str> + ToSql + Display,
         &'a T: IntoUrl,
     {
         match self.cache.get(url)? {
@@ -72,17 +107,31 @@ impl ApiClient {
 
     async fn get_and_cache<'a, T>(&mut self, url: &'a T) -> Result<String>
     where
-        T: AsRef<str> + ToSql,
+        T: AsRef<str> + ToSql + Display,
         &'a T: IntoUrl,
     {
         let response = self.client.get(url).send().await?;
+
+        // Bail on error
+        let status = response.status();
+        if !status.is_success() {
+            return err(format!(
+                "Unable to connect to {}: {} {}",
+                url,
+                status.as_str(),
+                status.canonical_reason().unwrap_or("")
+            )
+            .as_str());
+        }
+
         let mut max_age = None;
         if let Some(cache_control) = response.headers().get(CACHE_CONTROL) {
             if let Ok(cache_control) = cache_control.to_str() {
                 for mut part in cache_control.split(',') {
                     part = part.trim();
-                    if part.starts_with("max-age") { // max-age= and then unwrap splitonece..
-                        if let Some((_, v)) = part.split_once('=') {
+                    if part.starts_with("max-age") {
+                        if let Some((_, mut v)) = part.split_once('=') {
+                            v = v.trim();
                             if let Ok(v) = v.parse::<u32>() {
                                 max_age = Some(v);
                                 break;
@@ -96,12 +145,6 @@ impl ApiClient {
         let text = response.text().await?;
         self.cache.insert(url, max_age, Utc::now(), &text)?;
         Ok(text)
-    }
-
-    /// Fetch a weather forecast from a given url.
-    pub async fn get_forecast_from_url(&mut self, url: String) -> Result<Forecast> {
-        let json = self.fetch_resource(&url).await?;
-        Ok(serde_json::from_str(&json)?)
     }
 }
 

@@ -4,10 +4,10 @@ use wiremock::{
     Mock, MockServer, ResponseTemplate,
 };
 
-use weather::{cache::Cache, client::{round_fmt, ApiClient}};
+use wthr::{cache::Cache, client::{round_fmt, ApiClient}};
 
 mod common;
-use common::{json, API, APP, USER};
+use common::{json, tempcache, API, APP, USER};
 
 #[tokio::test]
 async fn fetch_from_cache() {
@@ -23,5 +23,5 @@ async fn fetch_from_cache() {
         .mount(&server)
         .await;
 
-    let _c = Cache::new().unwrap();
+    let (cache, tempdir) = tempcache();
 }

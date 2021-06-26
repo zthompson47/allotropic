@@ -1,15 +1,12 @@
 #![allow(dead_code, unused_variables)]
-use std::{
-    env, fs,
-    path::{Path, PathBuf},
-};
+use std::{env, fs, path::PathBuf};
 
 use chrono::{DateTime, Utc};
 use rusqlite::{named_params, Connection, ToSql};
 
 use crate::{
     error::{err, Result},
-    APP_NAME,
+    APP,
 };
 
 #[derive(Debug)]
@@ -33,17 +30,14 @@ impl Cache {
         Self::with_base_dir(None)
     }
 
-    fn with_base_dir(base_dir: Option<&Path>) -> Result<Self> {
+    pub fn with_base_dir(base_dir: Option<PathBuf>) -> Result<Self> {
         let db_path = match base_dir {
-            Some(dir) => PathBuf::from(dir),
+            Some(dir) => dir,
             None => match env::var("XDG_DATA_HOME") {
-                Ok(dir) => PathBuf::from(dir).join(APP_NAME),
+                Ok(dir) => PathBuf::from(dir).join(APP),
                 Err(_) => match env::var("HOME") {
-                    Ok(dir) => PathBuf::from(dir)
-                        .join(".local")
-                        .join("share")
-                        .join(APP_NAME),
-                    Err(_) => PathBuf::from("/tmp").join(APP_NAME),
+                    Ok(dir) => PathBuf::from(dir).join(".local").join("share").join(APP),
+                    Err(_) => PathBuf::from("/tmp").join(APP),
                 },
             },
         };
@@ -58,7 +52,7 @@ impl Cache {
         // Open the database, which creates a new db file if needed
         let conn = match db_path {
             Some(mut db_path) => {
-                db_path = db_path.join(APP_NAME);
+                db_path = db_path.join(APP);
                 db_path.set_extension("db");
                 Connection::open(&db_path)?
             }
@@ -129,7 +123,7 @@ impl Cache {
         Ok(())
     }
 
-    fn db_version(&self) -> Result<u32> {
+    pub fn db_version(&self) -> Result<u32> {
         let mut stmt = self.conn.prepare("select max(id) from version")?;
         let mut rows = stmt.query([])?;
         if let Some(row) = rows.next()? {
@@ -168,7 +162,7 @@ mod tests {
         let temp_dir = tempdir().unwrap();
 
         // Cache should create new database with version = 1
-        let cache = Cache::with_base_dir(Some(temp_dir.path())).unwrap();
+        let cache = Cache::with_base_dir(Some(temp_dir.path().to_path_buf())).unwrap();
         assert_eq!(cache.db_version().unwrap(), 1);
 
         (cache, temp_dir)
@@ -191,7 +185,7 @@ mod tests {
         let mut db_path = PathBuf::from(temp_dir.path());
 
         // Confirm full database path
-        db_path = db_path.join(APP_NAME);
+        db_path = db_path.join(APP);
         db_path.set_extension("db");
         let conn = Connection::open(&db_path).unwrap();
 
@@ -210,7 +204,7 @@ mod tests {
 
         // Create a new instance of `Cache` to make sure it can reuse the database
         conn.execute("update version set id = ?", [2]).unwrap();
-        let cache = Cache::with_base_dir(Some(temp_dir.path())).unwrap();
+        let cache = Cache::with_base_dir(Some(temp_dir.path().to_path_buf())).unwrap();
         assert_eq!(cache.db_version().unwrap(), 2);
     }
 

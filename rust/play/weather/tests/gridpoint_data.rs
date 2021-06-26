@@ -1,4 +1,4 @@
-use weather::forecast::GridpointData;
+use wthr::forecast::GridpointData;
 
 mod common;
 use common::json;

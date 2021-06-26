@@ -3,7 +3,7 @@ use wiremock::{
     Mock, MockServer, ResponseTemplate,
 };
 
-use weather::client::ApiClient;
+use wthr::client::ApiClient;
 
 mod common;
 use common::{json, APP, USER};
@@ -23,7 +23,14 @@ async fn get_point() {
 
     let latitude: f64 = 42.44645644561855;
     let longitude: f64 = -76.4807390759812;
-    let mut client = ApiClient::new(&mock_server.uri(), APP, USER).unwrap();
+
+    //let mut client = ApiClient::new(&mock_server.uri(), APP, USER).unwrap();
+    let mut client = ApiClient::builder()
+        .base_url(&mock_server.uri())
+        .api_key(APP, USER)
+        .build()
+        .unwrap();
+
     let point = client.get_point(vec![latitude, longitude]).await.unwrap();
 
     assert_eq!(

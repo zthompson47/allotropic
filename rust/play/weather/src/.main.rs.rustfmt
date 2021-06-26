@@ -9,9 +9,13 @@ use sunrise::sunrise_sunset;
 use wthr::{
     client::ApiClient,
     config::{Base, Config},
-    error::{err, Result},
+    error::Result,
     APP, NWS_API,
 };
+
+const USR: &str = "zach@allotropic.com";
+const LAT: f64 = 42.440932990492946;
+const LON: f64 = -76.52462385924595;
 
 #[derive(Debug, Default, StructOpt)]
 pub struct Opt {
@@ -34,35 +38,31 @@ pub struct Opt {
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
     let config = Config::load(Base::FromEnv).unwrap_or_default();
+    println!("{:?}", config);
     let opt = Opt::from_args();
 
-    // Get location from config
+    /*
     let (lat, lon) = if let Some(l) = opt.location {
         if let Some(l) = config.locations.get(&l) {
             (l.latitude, l.longitude)
         } else {
-            return err("Please provide a latitude/longitude location");
+            panic!()
         }
     } else if opt.latitude.is_some() && opt.longitude.is_some() {
         (opt.latitude.unwrap(), opt.longitude.unwrap())
     } else if let Some(l) = config.location {
         (l.latitude, l.longitude)
     } else {
-        return err("Please provide a latitude/longitude location");
+        panic!()
     };
+    */
 
-    // Get api key from config
-    let api_key = match opt.api_key {
-        Some(k) => k,
-        None => match config.api_key {
-            Some(k) => k,
-            None => return err("Please provide an api key"),
-        },
-    };
+    let lat = LAT;
+    let lon = LON;
 
     let mut client = ApiClient::builder()
         .base_url(NWS_API)
-        .api_key(APP, &api_key)
+        .api_key(APP, USR)
         .build()?;
 
     // Find the weather station gridpoint for the location
@@ -114,6 +114,18 @@ async fn main() -> Result<()> {
         let time = DateTime::from_utc(period.start_time.naive_utc(), Utc);
         let date = time.date();
 
+        /*
+        let (sunrise, sunset) = match sun_times.get(&date) {
+            Some(s) => *s,
+            None => {
+                let (rise, set) = sunrise_sunset(LAT, LON, date.year(), date.month(), date.day());
+                let rise = Utc.timestamp(rise, 0);
+                let set = Utc.timestamp(set, 0);
+                sun_times.insert(date, (rise, set));
+                (rise, set)
+            }
+        };
+        */
         let (sunrise, sunset) = sun_times.entry(date).or_insert({
             let (rise, set) = sunrise_sunset(lat, lon, date.year(), date.month(), date.day());
             (Utc.timestamp(rise, 0), Utc.timestamp(set, 0))

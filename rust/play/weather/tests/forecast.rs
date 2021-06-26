@@ -1,4 +1,4 @@
-use weather::forecast::Forecast;
+use wthr::forecast::Forecast;
 
 mod common;
 use common::json;
