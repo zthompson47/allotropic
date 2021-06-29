@@ -1,3 +1,4 @@
+use chrono_tz::Tz;
 use geojson::Geometry;
 use serde::Deserialize;
 
@@ -29,7 +30,7 @@ pub struct PointProperties {
     pub forecast_zone: Url,
     pub county: Url,
     pub fire_weather_zone: Url,
-    pub time_zone: String,
+    pub time_zone: Tz,
     pub radar_station: String,
 }
 
@@ -47,4 +48,14 @@ pub struct RelativeLocationProperties {
     pub state: String,
     pub distance: Quantity,
     pub bearing: Quantity,
+}
+
+impl Point {
+    pub fn city(&self) -> &str {
+        &self.properties.relative_location.properties.city
+    }
+
+    pub fn state(&self) -> &str {
+        &self.properties.relative_location.properties.state
+    }
 }

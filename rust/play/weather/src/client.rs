@@ -1,8 +1,7 @@
-use std::{fmt::Display, path::PathBuf};
+use std::path::PathBuf;
 
 use chrono::{Duration, Utc};
-use reqwest::{header::CACHE_CONTROL, Client, IntoUrl};
-use rusqlite::ToSql;
+use reqwest::{header::CACHE_CONTROL, Client};
 
 use crate::{
     cache::Cache,
@@ -80,16 +79,12 @@ impl ApiClient {
 
     /// Fetch a weather forecast from a given url, for different time
     /// resolutions.
-    pub async fn get_forecast_from_url(&mut self, url: String) -> Result<Forecast> {
-        let json = self.fetch_resource(&url).await?;
+    pub async fn get_forecast_from_url(&mut self, url: &str) -> Result<Forecast> {
+        let json = self.fetch_resource(url).await?;
         Ok(serde_json::from_str(&json)?)
     }
 
-    async fn fetch_resource<'a, T>(&mut self, url: &'a T) -> Result<String>
-    where
-        T: AsRef<str> + ToSql + Display,
-        &'a T: IntoUrl,
-    {
+    async fn fetch_resource(&mut self, url: &str) -> Result<String> {
         match self.cache.get(url)? {
             Some(entry) => {
                 let max_age = entry.max_age.unwrap_or(0);
@@ -105,11 +100,7 @@ impl ApiClient {
         }
     }
 
-    async fn get_and_cache<'a, T>(&mut self, url: &'a T) -> Result<String>
-    where
-        T: AsRef<str> + ToSql + Display,
-        &'a T: IntoUrl,
-    {
+    async fn get_and_cache(&mut self, url: &str) -> Result<String> {
         let response = self.client.get(url).send().await?;
 
         // Bail on error

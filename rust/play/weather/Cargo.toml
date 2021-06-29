@@ -12,9 +12,11 @@ maintenance = { status = "passively-maintained" }
 
 [dependencies]
 chrono = { version = "0.4.19", features = ["serde"] }
+chrono-tz = { version = "0.5.3", features = ["serde"] }
 clap = "2.33.3"
 colorgrad = "0.4.0"
 crossterm = "0.20.0"
+esbat = "0.1.0"
 geojson = "0.22.2"
 home = "0.5.3"
 reqwest = { version = "0.11.3", features = ["json"] }
@@ -25,6 +27,7 @@ structopt = "0.3.21"
 sunrise = "1.0.0"
 tokio = { version = "1.6.1", features = ["macros"] }
 toml = "0.5.8"
+url = "2.2.2"
 
 [dev-dependencies]
 tempfile = "3.2.0"

@@ -26,5 +26,6 @@ pub fn json(file: &str) -> String {
         std::env::var("CARGO_MANIFEST_DIR").unwrap(),
         file
     );
+
     std::fs::read_to_string(path).unwrap()
 }
