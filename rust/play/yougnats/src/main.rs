@@ -33,18 +33,51 @@ fn main() {
     let radians = Angle::radians(2.5);
     println!("14. {} radians => {} degrees", radians, radians.as_degrees());
 
-    /*
     let inches = Length::inches(47.);
     println!("{:?} {}", &inches, &inches);
-    let area = inches.clone() * inches;
+    let area = inches.clone() * inches.clone();
     println!("{:?}", area);
-    */
+    let volume = inches.clone() * inches.clone() * inches;
+    println!("{:?}", volume);
 }
 
 #[derive(Clone, Debug)]
 struct Length {
     value: f64,
     unit: Unit,
+}
+
+impl Mul for Length {
+    type Output = Length;
+
+    fn mul(self, rhs: Self) -> Length {
+        Length {
+            value: self.value * rhs.value,
+            unit: self.unit * rhs.unit,
+        }
+    }
+}
+
+impl Display for Length {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        write!(f, "{}", self.value / self.unit.factor())
+    }
+}
+
+impl Length {
+    l!(
+        Length, {
+            au => Unit::Au,
+            feet => Unit::Foot,
+            inches => Unit::Inch,
+            kilometers => Unit::Kilometer,
+            light_years => Unit::LightYear,
+            meters => Unit::Meter,
+            miles => Unit::Mile,
+            millimeters => Unit::Millimeter,
+            parsecs => Unit::Parsec
+        }
+    );
 }
 
 #[derive(Debug)]
@@ -66,63 +99,6 @@ impl Display for Angle {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         write!(f, "{}", self.value / self.unit.factor())
     }
-}
-
-impl Mul for Length {
-    type Output = Self;
-
-    fn mul(self, rhs: Self) -> Self {
-        Length {
-            value: self.value * rhs.value,
-            unit: self.unit * rhs.unit,
-        }
-    }
-}
-
-impl Display for Length {
-    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
-        write!(f, "{}", self.value / self.unit.factor())
-    }
-}
-
-use paste::paste;
-#[macro_export]
-macro_rules! l {
-    ( $t:ty, { $( $x:ident => $y:expr ),+ } ) => {
-        paste! {
-            $(
-                fn $x(value: f64) -> Self {
-                    $t {
-                        value: value * $y.factor(),
-                        unit: $y,
-                    }
-                }
-
-                fn [<as_ $x>](&self) -> Self {
-                    $t {
-                        value: self.value,
-                        unit: $y,
-                    }
-                }
-            )+
-        }
-    };
-}
-
-impl Length {
-    l!(
-        Length, {
-            au => Unit::Au,
-            feet => Unit::Foot,
-            inches => Unit::Inch,
-            kilometers => Unit::Kilometer,
-            light_years => Unit::LightYear,
-            meters => Unit::Meter,
-            miles => Unit::Mile,
-            millimeters => Unit::Millimeter,
-            parsecs => Unit::Parsec
-        }
-    );
 }
 
 #[derive(Clone, Debug)]
@@ -166,4 +142,28 @@ impl Mul for Unit {
     fn mul(self, rhs: Self) -> Self {
         Unit::Mul(Box::new(self), Box::new(rhs))
     }
+}
+
+use paste::paste;
+#[macro_export]
+macro_rules! l {
+    ( $t:ty, { $( $x:ident => $y:expr ),+ } ) => {
+        paste! {
+            $(
+                fn $x(value: f64) -> Self {
+                    $t {
+                        value: value * $y.factor(),
+                        unit: $y,
+                    }
+                }
+
+                fn [<as_ $x>](&self) -> Self {
+                    $t {
+                        value: self.value,
+                        unit: $y,
+                    }
+                }
+            )+
+        }
+    };
 }
