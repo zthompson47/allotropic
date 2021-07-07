@@ -1,30 +1,66 @@
-use std::{cmp::{Ordering, PartialEq, PartialOrd}, fmt::{Display, Formatter, Result}, ops::{Add, Deref, Div, Mul, Neg, Sub}};
+use std::{
+    cmp::{Ordering, PartialEq, PartialOrd},
+    fmt::{Display, Formatter, Result},
+    ops::{Add, Deref, Div, Mul, Neg, Sub},
+};
 
 use paste::paste;
 
 fn main() {
+    let inch = inches(22.);
+    let gram = grams(99.);
+    let meter = meters(4.);
+    let kilogram = kilograms(47.);
+
+    if inch > meter {
+        println!("{} greater than {}", inch.as_meters(), meter);
+    } else {
+        println!("{} less than {}", inch.as_meters(), meter);
+    }
+
+    let a_to_m = inches(42.);
+    println!("a_to_m: {:?}", a_to_m.as_meters());
+
+    //let iii = 47. * i;
+
+    println!("{:?} + {:?} = {:?}", inch, inch, inch + inch);
+    println!("{:?} * {:?} = {:?}", inch, gram, inch * gram);
+    println!("{:?} * {:?} = {:?}", inch, inch, inch * inch);
+    println!("{:?} / {:?} = {:?}", inch, gram, inch / gram);
+    println!(
+        "{:?}",
+        ((inch * gram) + (inch * gram) + (meter * kilogram)) * meter * kilogram
+    );
 }
 
 #[derive(Clone, Copy, Debug)]
-struct Value<U> {
+struct Value<U: Unit> {
     value: f64,
     unit: U,
 }
 
+impl<U: Unit + Clone> Value<U> {
+    fn sqrt(mut self) -> Self {
+        Value {
+            value: self.value.sqrt(),
+            unit: self.unit.map_power(&|p| p / 2.),
+        }
+    }
+}
+
 impl<U: Unit> Value<U> {
     fn norm(&self) -> f64 {
-        println!("]]]]]]]]]]]]]{}/{}[[[[[[[[[[[[[[[[[[[[[", self.value, self.unit.factor());
         self.value * self.unit.factor()
     }
 }
 
-impl<U> Display for Value<U> {
+impl<U: Unit> Display for Value<U> {
     fn fmt(&self, fmt: &mut Formatter<'_>) -> Result {
         write!(fmt, "{}", self.value)
     }
 }
 
-impl<U> Deref for Value<U> {
+impl<U: Unit> Deref for Value<U> {
     type Target = f64;
 
     fn deref(&self) -> &f64 {
@@ -47,14 +83,18 @@ impl<U: Unit> PartialOrd for Value<U> {
 impl Value<LengthUnit> {
     fn as_meters(&self) -> Value<LengthUnit> {
         Value {
-            value: self.norm() / LengthUnit::Meter.factor(),
-            unit: LengthUnit::Meter,
+            value: self.norm() / LengthUnit::Meter(1.).factor(),
+            unit: LengthUnit::Meter(1.),
         }
     }
 }
 
 trait Unit {
     fn factor(&self) -> f64;
+    fn power(&self) -> Option<f64>;
+    fn map_power<F>(&mut self, f: &F) -> Self
+    where
+        F: Fn(f64) -> f64;
 }
 
 unit! {
@@ -82,93 +122,51 @@ unit! {
     }
 }
 
-/*
 #[derive(Clone, Copy, Debug)]
-enum LengthUnit {
-    Inch,
-    Meter,
-}
-*/
+struct MulUnit<UnitL: Unit, UnitR: Unit>(UnitL, UnitR);
 
-/*
-impl Unit for LengthUnit {
+impl<UnitL: Unit, UnitR: Unit> Unit for MulUnit<UnitL, UnitR> {
     fn factor(&self) -> f64 {
-        match self {
-            LengthUnit::Inch => 0.0254,
-            LengthUnit::Meter => 1.,
-        }
+        self.0.factor() * self.1.factor()
     }
-}
-*/
 
-/*
-#[derive(Clone, Copy, Debug)]
-enum MassUnit {
-    Kilogram,
-    Gram,
-}
-*/
+    fn power(&self) -> Option<f64> {
+        None //self.0.power() + self.1.power()
+    }
 
-#[derive(Clone, Copy, Debug)]
-struct MulUnit<UnitL, UnitR>(UnitL, UnitR);
-
-#[derive(Clone, Copy, Debug)]
-struct DivUnit<UnitL, UnitR>(UnitL, UnitR);
-
-/*
-fn inches(value: f64) -> Value<LengthUnit> {
-    Value {
-        value,
-        unit: LengthUnit::Inch,
+    fn map_power<F>(&mut self, f: &F) -> Self
+    where
+        F: Fn(f64) -> f64,
+    {
+        MulUnit(self.0.map_power(&f), self.1.map_power(&f))
     }
 }
 
-fn meters(value: f64) -> Value<LengthUnit> {
-    Value {
-        value,
-        unit: LengthUnit::Meter,
-    }
-}
-
-fn grams(value: f64) -> Value<MassUnit> {
-    Value {
-        value,
-        unit: MassUnit::Gram,
-    }
-}
-
-fn kilograms(value: f64) -> Value<MassUnit> {
-    Value {
-        value,
-        unit: MassUnit::Kilogram,
-    }
-}
-*/
-
-impl<U> Add<Value<U>> for Value<U> {
+impl<U: Unit> Add<Value<U>> for Value<U> {
     type Output = Value<U>;
 
     fn add(self, rhs: Value<U>) -> Value<U> {
+        let rval = rhs.norm() / self.unit.factor();
         Value {
-            value: self.value + rhs.value,
+            value: self.value + rval,
             unit: self.unit,
         }
     }
 }
 
-impl<U> Sub<Value<U>> for Value<U> {
+impl<U: Unit> Sub<Value<U>> for Value<U> {
     type Output = Value<U>;
 
     fn sub(self, rhs: Value<U>) -> Value<U> {
-        println!(">>>>>>>{}/{}<<{}<<<<<<<", self.value, rhs.value, self.value - rhs.value);
+        let rval = rhs.norm() / self.unit.factor();
         Value {
-            value: self.value - rhs.value,
+            value: self.value - rval,
             unit: self.unit,
         }
     }
 }
 
-impl<UnitL, UnitR> Mul<Value<UnitR>> for Value<UnitL> {
+impl<UnitL: Unit, UnitR: Unit> Mul<Value<UnitR>> for Value<UnitL> {
     type Output = Value<MulUnit<UnitL, UnitR>>;
 
     fn mul(self, rhs: Value<UnitR>) -> Value<MulUnit<UnitL, UnitR>> {
@@ -179,18 +177,18 @@ impl<UnitL, UnitR> Mul<Value<UnitR>> for Value<UnitL> {
     }
 }
 
-impl<UnitL, UnitR> Div<Value<UnitR>> for Value<UnitL> {
+impl<UnitL: Unit, UnitR: Unit> Div<Value<UnitR>> for Value<UnitL> {
     type Output = Value<MulUnit<UnitL, UnitR>>;
 
-    fn div(self, rhs: Value<UnitR>) -> Value<MulUnit<UnitL, UnitR>> {
+    fn div(self, mut rhs: Value<UnitR>) -> Value<MulUnit<UnitL, UnitR>> {
         Value {
             value: self.value / rhs.value,
-            unit: MulUnit(self.unit, rhs.unit),
+            unit: MulUnit(self.unit, rhs.unit.map_power(&|p| -p)),
         }
     }
 }
 
-impl <U> Neg for Value<U> {
+impl<U: Unit> Neg for Value<U> {
     type Output = Self;
 
     fn neg(self) -> Self {
@@ -203,27 +201,47 @@ impl <U> Neg for Value<U> {
 
 #[macro_export]
 macro_rules! unit {
-    ( $t:ty { $( $x:ident => ($y:ident, $c:literal, $f:expr) ),+ } ) => {
+    ( $unit:ty { $( $var:ident => ($new:ident, $abbr:literal, $factor:expr) ),+ } ) => {
         paste! {
             #[derive(Clone, Copy, Debug)]
-            enum $t {
-                $( $x, )+
+            enum $unit {
+                $( $var(f64), )+
             }
 
-            impl Unit for $t {
+            impl Unit for $unit {
                 fn factor(&self) -> f64 {
                     match self {
-                        $( $t::$x => $f, )+
+                        $( $unit::$var(_) => $factor, )+
+                    }
+                }
+
+                fn power(&self) -> Option<f64> {
+                    match self {
+                        $( $unit::$var(p) => Some(*p), )+
+                    }
+                }
+
+                fn map_power<F>(&mut self, f: &F) -> $unit
+                where
+                    F: Fn(f64) -> f64,
+                {
+                    match self {
+                        $(
+                            $unit::$var(p) => {
+                                *p = f(*p);
+                                *self
+                            },
+                        )+
                     }
                 }
             }
 
             $(
                 #[allow(dead_code)]
-                fn $y(value: f64) -> Value<$t> {
+                fn $new(value: f64) -> Value<$unit> {
                     Value {
                         value,
-                        unit: $t::$x,
+                        unit: $unit::$var(1.),
                     }
                 }
             )+
@@ -243,16 +261,14 @@ mod tests {
     #[test]
     fn deref() {
         let val = grams(99.);
-
         assert!(eq(*val, 99.));
-        assert!(eq(val.sqrt(), 9.9498743710662));
+        assert!(eq(*val.sqrt(), 9.9498743710662));
     }
 
     #[test]
     fn partial_ord() {
         let inch = inches(22.);
         let meter = meters(4.);
-
         assert!(*inch > *meter);
         assert!(inch < meter);
     }
@@ -261,7 +277,6 @@ mod tests {
     fn conversion() {
         let i = inches(42.);
         let m = i.as_meters();
-        
         assert!(eq(*m, 1.0668));
     }
 
@@ -269,7 +284,6 @@ mod tests {
     fn add() {
         let inch = inches(22.);
         let meter = meters(4.);
-
         assert_eq!(inches(66.), inch + inch + inch);
         assert_eq!(millimeters(660.4), inch + meter);
     }
@@ -279,15 +293,28 @@ mod tests {
         let inch = inches(22.);
         let meter = meters(4.);
         let nautical = nautical_miles(1.47);
-
         println!("--->>>{}", (nautical).norm());
         println!("--->>>{}", (inch).norm());
         println!("--->>>{}", (-inch).norm());
         println!("--->>>{}", (nautical - inch).norm());
         println!("--->>>{}", (nautical - inch - meter).norm());
-        assert!(eq((inch - inches(1.) - inches(1.) - inches(1.)).norm(), inches(19.).norm()));
+        assert!(eq(
+            (inch - inches(1.) - inches(1.) - inches(1.)).norm(),
+            inches(19.).norm()
+        ));
         assert!(eq(miles(22.3).norm(), (nautical - meter - inch).norm()));
         //assert_eq!(miles(22.3), nautical - meter - inch);
+    }
+
+    #[test]
+    fn sqrt() {
+        let m = meters(42.);
+        let g = kilograms(47.);
+        let n = g / m.sqrt();
+        println!("{:?}", m);
+        println!("{:?}", n);
+        assert_eq!(m.unit.power(), Some(1.));
+        assert_eq!(n.unit.power(), None);
     }
 
     #[test]
