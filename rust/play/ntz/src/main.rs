@@ -80,15 +80,6 @@ impl<U: Unit> PartialOrd for Value<U> {
     }
 }
 
-impl Value<LengthUnit> {
-    fn as_meters(&self) -> Value<LengthUnit> {
-        Value {
-            value: self.norm() / LengthUnit::Meter(1.).factor(),
-            unit: LengthUnit::Meter(1.),
-        }
-    }
-}
-
 trait Unit {
     fn factor(&self) -> f64;
     fn power(&self) -> Option<f64>;
@@ -245,6 +236,19 @@ macro_rules! unit {
                     }
                 }
             )+
+
+            impl Value<$unit> {
+                $(
+                    #[allow(dead_code)]
+                    fn [<as_$new>](&self) -> Value<$unit> {
+                        Value {
+                            value: self.norm() / $unit::$var(1.).factor(),
+                            unit: $unit::$var(1.),
+                        }
+                    }
+                )+
+            }
+
         }
     };
 }
