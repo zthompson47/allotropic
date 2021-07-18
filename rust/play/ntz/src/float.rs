@@ -24,27 +24,27 @@ impl<U: Unit> FloatEq for Value<U> {
     type Tol = Value<U>;
 
     fn eq_abs(&self, other: &Self, tol: &Value<U>) -> bool {
-        self.value.eq_abs(&other.value, &tol.value)
+        self.norm().eq_abs(&other.norm(), &tol.norm())
     }
 
     fn eq_rmax(&self, other: &Self, tol: &Value<U>) -> bool {
-        self.value.eq_rmax(&other.value, &tol.value)
+        self.norm().eq_rmax(&other.norm(), &tol.norm())
     }
 
     fn eq_rmin(&self, other: &Self, tol: &Value<U>) -> bool {
-        self.value.eq_rmin(&other.value, &tol.value)
+        self.norm().eq_rmin(&other.norm(), &tol.norm())
     }
 
     fn eq_r1st(&self, other: &Self, tol: &Value<U>) -> bool {
-        self.value.eq_r1st(&other.value, &tol.value)
+        self.norm().eq_r1st(&other.norm(), &tol.norm())
     }
 
     fn eq_r2nd(&self, other: &Self, tol: &Value<U>) -> bool {
-        self.value.eq_r2nd(&other.value, &tol.value)
+        self.norm().eq_r2nd(&other.norm(), &tol.norm())
     }
 
     fn eq_ulps(&self, other: &Self, tol: &UlpsTol<Value<U>>) -> bool {
-        self.value.eq_ulps(&other.value, &tol)
+        self.norm().eq_ulps(&other.norm(), &tol)
     }
 }
 
@@ -52,27 +52,27 @@ impl<U: Unit> FloatEqAll for Value<U> {
     type AllTol = f64;
 
     fn eq_abs_all(&self, other: &Self, tol: &f64) -> bool {
-        self.value.eq_abs_all(&other.value, tol)
+        self.norm().eq_abs_all(&other.norm(), tol)
     }
 
     fn eq_rmax_all(&self, other: &Self, tol: &f64) -> bool {
-        self.value.eq_rmax_all(&other.value, tol)
+        self.norm().eq_rmax_all(&other.norm(), tol)
     }
 
     fn eq_rmin_all(&self, other: &Self, tol: &f64) -> bool {
-        self.value.eq_rmin_all(&other.value, tol)
+        self.norm().eq_rmin_all(&other.norm(), tol)
     }
 
     fn eq_r1st_all(&self, other: &Self, tol: &f64) -> bool {
-        self.value.eq_r1st_all(&other.value, tol)
+        self.norm().eq_r1st_all(&other.norm(), tol)
     }
 
     fn eq_r2nd_all(&self, other: &Self, tol: &f64) -> bool {
-        self.value.eq_r2nd_all(&other.value, tol)
+        self.norm().eq_r2nd_all(&other.norm(), tol)
     }
 
     fn eq_ulps_all(&self, other: &Self, tol: &UlpsTol<f64>) -> bool {
-        self.value.eq_ulps_all(&other.value, tol)
+        self.norm().eq_ulps_all(&other.norm(), tol)
     }
 }
 
@@ -95,55 +95,55 @@ where
 
     fn debug_abs_diff(&self, other: &Self) -> Value<U> {
         Value {
-            value: self.value.debug_abs_diff(&other.value),
+            value: self.norm().debug_abs_diff(&other.norm()),
             unit: self.unit,
         }
     }
 
     fn debug_ulps_diff(&self, other: &Self) -> ValueDebugUlpsDiff<U> {
         ValueDebugUlpsDiff {
-            value: self.value.debug_ulps_diff(&other.value),
+            value: self.norm().debug_ulps_diff(&other.norm()),
             unit: self.unit,
         }
     }
 
     fn debug_abs_tol(&self, other: &Self, tol: &Value<U>) -> Value<U> {
         Value {
-            value: self.value.debug_abs_tol(&other.value, &tol.value),
+            value: self.norm().debug_abs_tol(&other.norm(), &tol.norm()),
             unit: self.unit,
         }
     }
 
     fn debug_rmax_tol(&self, other: &Self, tol: &Value<U>) -> Value<U> {
         Value {
-            value: self.value.debug_rmax_tol(&other.value, &tol.value),
+            value: self.norm().debug_rmax_tol(&other.norm(), &tol.norm()),
             unit: self.unit,
         }
     }
 
     fn debug_rmin_tol(&self, other: &Self, tol: &Value<U>) -> Value<U> {
         Value {
-            value: self.value.debug_rmin_tol(&other.value, &tol.value),
+            value: self.norm().debug_rmin_tol(&other.norm(), &tol.norm()),
             unit: self.unit,
         }
     }
 
     fn debug_r1st_tol(&self, other: &Self, tol: &Value<U>) -> Value<U> {
         Value {
-            value: self.value.debug_r1st_tol(&other.value, &tol.value),
+            value: self.norm().debug_r1st_tol(&other.norm(), &tol.norm()),
             unit: self.unit,
         }
     }
 
     fn debug_r2nd_tol(&self, other: &Self, tol: &Value<U>) -> Value<U> {
         Value {
-            value: self.value.debug_r2nd_tol(&other.value, &tol.value),
+            value: self.norm().debug_r2nd_tol(&other.norm(), &tol.norm()),
             unit: self.unit,
         }
     }
 
     fn debug_ulps_tol(&self, other: &Self, tol: &ValueUlps) -> ValueUlps {
-        self.value.debug_ulps_tol(&other.value, &tol)
+        self.norm().debug_ulps_tol(&other.norm(), &tol)
     }
 }
 
@@ -155,35 +155,35 @@ where
 
     fn debug_abs_all_tol(&self, other: &Self, tol: &Self::AllTol) -> Self::AllDebugTol {
         Value {
-            value: self.value.debug_abs_all_tol(&other.value, tol),
+            value: self.norm().debug_abs_all_tol(&other.norm(), tol),
             unit: self.unit,
         }
     }
 
     fn debug_rmax_all_tol(&self, other: &Self, tol: &Self::AllTol) -> Self::AllDebugTol {
         Value {
-            value: self.value.debug_rmax_all_tol(&other.value, tol),
+            value: self.norm().debug_rmax_all_tol(&other.norm(), tol),
             unit: self.unit,
         }
     }
 
     fn debug_rmin_all_tol(&self, other: &Self, tol: &Self::AllTol) -> Self::AllDebugTol {
         Value {
-            value: self.value.debug_rmin_all_tol(&other.value, tol),
+            value: self.norm().debug_rmin_all_tol(&other.norm(), tol),
             unit: self.unit,
         }
     }
 
     fn debug_r1st_all_tol(&self, other: &Self, tol: &Self::AllTol) -> Self::AllDebugTol {
         Value {
-            value: self.value.debug_r1st_all_tol(&other.value, tol),
+            value: self.norm().debug_r1st_all_tol(&other.norm(), tol),
             unit: self.unit,
         }
     }
 
     fn debug_r2nd_all_tol(&self, other: &Self, tol: &Self::AllTol) -> Self::AllDebugTol {
         Value {
-            value: self.value.debug_r2nd_all_tol(&other.value, tol),
+            value: self.norm().debug_r2nd_all_tol(&other.norm(), tol),
             unit: self.unit,
         }
     }
@@ -193,7 +193,7 @@ where
         other: &Self,
         tol: &UlpsTol<Self::AllTol>,
     ) -> UlpsTol<Self::AllDebugTol> {
-        self.value.debug_ulps_all_tol(&other.value, tol)
+        self.norm().debug_ulps_all_tol(&other.norm(), tol)
     }
 }
 

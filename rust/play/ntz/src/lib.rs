@@ -11,42 +11,24 @@ pub mod temperature;
 pub mod time;
 
 pub mod prelude {
-    pub use super::{/*constant,*/ unit, Unit, Value};
+    pub use super::{unit, Unit, Value};
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy)]
 pub struct Value<U: Unit> {
     pub value: f64,
     pub unit: U,
 }
 
-/*
-pub fn constant(value: f64) -> Value<ConstantUnit> {
-    Value {
-        value,
-        unit: ConstantUnit(1.),
+impl<U: Unit + std::fmt::Debug> std::fmt::Debug for Value<U> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Value")
+            .field("norm", &self.norm())
+            .field("value", &self.value)
+            .field("unit", &self.unit)
+            .finish()
     }
 }
-
-pub struct ConstantUnit(f64);
-
-impl Unit for ConstantUnit {
-    fn factor(&self) -> f64 {
-        1.
-    }
-
-    fn power(&self) -> Option<f64> {
-        Some(self.0)
-    }
-
-    fn map_power<F>(&mut self, f: &F) -> Self
-    where
-        F: Fn(f64) -> f64,
-    {
-        ConstantUnit(f(self.0))
-    }
-}
-*/
 
 impl<U: Unit> Value<U> {
     pub fn sqrt(mut self) -> Self {
@@ -59,7 +41,6 @@ impl<U: Unit> Value<U> {
 
 impl<U: Unit> Value<U> {
     pub fn norm(&self) -> f64 {
-        println!("norm: {:?} {:?} {:?}", self.value, self.unit.factor(), self.unit.offset());
         self.value * self.unit.factor() + self.unit.offset()
     }
 }
@@ -248,20 +229,10 @@ macro_rules! unit {
                 }
             )+
 
-                /*
-            pub trait [<Convert$unit>] {
-                $(
-                    fn [<to_$new>](&self) -> Value<$unit>;
-                )+
-            }
-            */
-
-            //impl [<Convert$unit>] for Value<$unit> {
             impl Value<$unit> {
                 $(
                     #[allow(dead_code)]
                     pub fn [<to_$new>](self) -> Value<$unit> {
-                        println!("new: {:?} {:?} {:?}", self.norm(), $unit::$var(1.).offset(), $unit::$var(1.).factor());
                         Value {
                             value: (self.norm() $( - $offset )*) / $unit::$var(1.).factor(),
                             unit: $unit::$var(1.),

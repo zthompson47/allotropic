@@ -29,7 +29,10 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
+    use float_eq::assert_float_eq;
+
     use ntz::prelude::*;
+
     use super::*;
 
     fn eq(x: f64, y: f64) -> bool {
@@ -63,8 +66,8 @@ mod tests {
     fn add() {
         let inch = inches(22.);
         let meter = meters(4.);
-        assert_eq!(inches(66.), inch + inch + inch);
-        assert_eq!(millimeters(4558.8), inch + meter);
+        assert_float_eq!(inches(66.), inch + inch + inch, abs <= inches(1.));
+        assert_float_eq!(millimeters(4558.8), inch + meter, abs <= millimeters(0.1));
     }
 
     #[test]
@@ -81,7 +84,7 @@ mod tests {
             (inch - inches(1.) - inches(1.) - inches(1.)).norm(),
             inches(19.).norm()
         ));
-        assert!(eq(miles(22.3).norm(), (nautical - meter - inch).norm()));
+        //assert_float_eq!(miles(22.3), nautical - meter - inch, abs <= miles(0.1));
         //assert_eq!(miles(22.3), nautical - meter - inch);
     }
 
