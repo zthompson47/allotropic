@@ -7,9 +7,11 @@ use std::{
 pub mod angle;
 mod float;
 pub mod si;
+pub mod temperature;
+pub mod time;
 
 pub mod prelude {
-    pub use super::{constant, unit, Unit, Value};
+    pub use super::{/*constant,*/ unit, Unit, Value};
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -18,6 +20,7 @@ pub struct Value<U: Unit> {
     pub unit: U,
 }
 
+/*
 pub fn constant(value: f64) -> Value<ConstantUnit> {
     Value {
         value,
@@ -43,6 +46,7 @@ impl Unit for ConstantUnit {
         ConstantUnit(f(self.0))
     }
 }
+*/
 
 impl<U: Unit> Value<U> {
     pub fn sqrt(mut self) -> Self {
@@ -55,7 +59,8 @@ impl<U: Unit> Value<U> {
 
 impl<U: Unit> Value<U> {
     pub fn norm(&self) -> f64 {
-        self.value * self.unit.factor()
+        println!("norm: {:?} {:?} {:?}", self.value, self.unit.factor(), self.unit.offset());
+        self.value * self.unit.factor() + self.unit.offset()
     }
 }
 
@@ -157,10 +162,11 @@ impl<U: Unit> Neg for Value<U> {
 
 pub trait Unit {
     fn factor(&self) -> f64;
-    fn power(&self) -> Option<f64>;
     fn map_power<F>(&mut self, f: &F) -> Self
     where
         F: Fn(f64) -> f64;
+    fn offset(&self) -> f64;
+    fn power(&self) -> Option<f64>;
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -169,6 +175,12 @@ pub struct MulUnit<L: Unit, R: Unit>(L, R);
 impl<L: Unit, R: Unit> Unit for MulUnit<L, R> {
     fn factor(&self) -> f64 {
         self.0.factor() * self.1.factor()
+    }
+
+    fn offset(&self) -> f64 {
+        // TODO: this is wrong..  need to have a `convert()` method or something
+        // to calculate based on offset and factor..
+        self.0.offset() + self.1.offset()
     }
 
     fn power(&self) -> Option<f64> {
@@ -185,7 +197,7 @@ impl<L: Unit, R: Unit> Unit for MulUnit<L, R> {
 
 #[macro_export]
 macro_rules! unit {
-    ( $unit:ty { $( $var:ident => ($new:ident, $abbr:literal, $factor:expr) ),+ } ) => {
+    ( $unit:ty { $( $var:ident => ($new:ident, $abbr:literal, $factor:expr $(, $offset:expr )* ) ),+ } ) => {
         paste::paste! {
             #[derive(Clone, Copy, Debug)]
             pub enum $unit {
@@ -202,6 +214,12 @@ macro_rules! unit {
                 fn power(&self) -> Option<f64> {
                     match self {
                         $( $unit::$var(p) => Some(*p), )+
+                    }
+                }
+
+                fn offset(&self) -> f64 {
+                    match self {
+                        $( $unit::$var(_) => 0. $( + $offset )*, )+
                     }
                 }
 
@@ -230,18 +248,22 @@ macro_rules! unit {
                 }
             )+
 
+                /*
             pub trait [<Convert$unit>] {
                 $(
                     fn [<to_$new>](&self) -> Value<$unit>;
                 )+
             }
+            */
 
-            impl [<Convert$unit>] for Value<$unit> {
+            //impl [<Convert$unit>] for Value<$unit> {
+            impl Value<$unit> {
                 $(
                     #[allow(dead_code)]
-                    fn [<to_$new>](&self) -> Value<$unit> {
+                    pub fn [<to_$new>](self) -> Value<$unit> {
+                        println!("new: {:?} {:?} {:?}", self.norm(), $unit::$var(1.).offset(), $unit::$var(1.).factor());
                         Value {
-                            value: self.norm() / $unit::$var(1.).factor(),
+                            value: (self.norm() $( - $offset )*) / $unit::$var(1.).factor(),
                             unit: $unit::$var(1.),
                         }
                     }

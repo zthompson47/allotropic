@@ -213,15 +213,13 @@ mod tests {
 
     use float_eq::assert_float_eq;
 
-    use crate::constant;
-
     use u::{goods, betters, bests};
 
     #[test]
     fn equality() {
-        let a = goods(99.32);
+        let a = goods(99.22);
         let b = betters(49.61);
-        let c = bests(2.434234343);
+        let _c = bests(2.434234343);
 
         assert_float_eq!(a, a, ulps <= 1);
         assert_float_eq!(a, a, r2nd <= goods(f64::EPSILON));
