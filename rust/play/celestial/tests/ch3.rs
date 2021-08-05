@@ -1,7 +1,8 @@
 use chrono::{Date, DateTime, Datelike, TimeZone, Timelike, Utc};
+use chrono_tz::{Etc::GMTPlus4, US::Eastern};
 use float_eq::assert_float_eq;
 
-use celestial::{is_leap_year, Day, JulianDay};
+use celestial::{is_leap_year, Day, JulianDay, ToSidereal};
 
 #[test]
 fn ch3_q1_q4() {
@@ -97,6 +98,42 @@ fn ch3_q13() {
 fn ch3_q14() {
     assert_eq!(Date::from_days_into_year(1900, 250), Utc.ymd(1900, 9, 7));
 }
+
+#[test]
+fn ch3_q15() {
+    let date = Eastern.ymd(2014, 12, 12).and_hms(20, 0, 0);
+    assert_eq!(
+        date.with_timezone(&Utc),
+        Utc.ymd(2014, 12, 13).and_hms(1, 0, 0)
+    );
+    assert_eq!(
+        date.with_timezone(&Utc).to_gst(),
+        Utc.ymd(2014, 12, 13).and_hms(6, 26, 34)
+    );
+    assert_eq!(
+        date.with_timezone(&Utc).to_lst(-77.),
+        Utc.ymd(2014, 12, 13).and_hms(1, 18, 34)
+    );
+}
+
+#[test]
+fn ch3_q16() {
+    let date = GMTPlus4.ymd(2000, 7, 5).and_hms(5, 24, 20);
+
+}
+
+/*
+#[test]
+fn gst_with_day_offset() {
+    let date = Utc.ymd(2014, 12, 12).and_hms(23, 59, 59);
+    assert_eq!(
+        date.to_gst(),
+        NaiveDate::from_ymd(2014, 12, 13).and_hms(5, 26, 23)
+    );
+    // TODO: find gst conversions that offset days in both directions.. confirm above
+    // day flipover
+}
+*/
 
 #[test]
 fn pre_gregorian_dates() {

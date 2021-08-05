@@ -1,4 +1,4 @@
-use chrono::{Date, DateTime, Datelike, TimeZone, Timelike, Utc};
+use chrono::{Date, DateTime, Datelike, NaiveDateTime, TimeZone, Timelike, Utc};
 
 pub trait JulianDay {
     fn to_julian_day(&self) -> f64;
@@ -7,6 +7,75 @@ pub trait JulianDay {
     fn days_into_year(&self) -> u32;
     fn from_days_into_year(year: i32, days: u32) -> Self;
     fn is_leap_year(&self) -> bool;
+}
+
+pub trait ToSidereal: JulianDay + Timelike {
+    fn to_gst(&self) -> Self;
+    fn to_lst(&self, longitude: f64) -> Self;
+}
+
+#[derive(Clone)]
+pub struct SiderealDateTime<Tz: TimeZone> {
+    datetime: DateTime<Tz>,
+}
+
+impl ToSidereal for DateTime<Utc> {
+    #[allow(clippy::many_single_char_names)]
+    fn to_gst(&self) -> DateTime<Utc> {
+        let jd = self.date().to_julian_day();
+        let jd0 = self
+            .date()
+            .with_month(1)
+            .unwrap()
+            .with_day(1)
+            .unwrap()
+            .to_julian_day();
+        let days = jd - jd0;
+        let t = (jd0 - 2_415_020.0) / 36_525.;
+        let r = 6.6460656 + 2400.051262 * t + 0.00002581 * t.powi(2);
+        let b = 24. - r + 24. * (self.year() as f64 - 1900.);
+        let t0 = 0.0657098 * days - b;
+        let ut = self.decimal_hour();
+        let mut gst = t0 + 1.002738 * ut;
+        //let mut day_offset = 0i32;
+        if gst < 0. {
+            gst += 24.;
+            //day_offset = -1;
+        }
+        if gst >= 24. {
+            gst -= 24.;
+            //day_offset = 1;
+        };
+        let (h, m, s) = decimal_hour_to_hms(gst);
+
+        //NaiveDate::from_ymd(self.year(), self.month(), self.day()).and_hms(h, m, s)
+        self.with_hour(h)
+            .unwrap()
+            .with_minute(m)
+            .unwrap()
+            .with_second(s)
+            .unwrap()
+    }
+
+    fn to_lst(&self, longitude: f64) -> Self {
+        let gst = self.to_gst().decimal_hour();
+        let adjustment = longitude / 15.;
+        let mut lst = gst + adjustment;
+        if lst < 0. {
+            lst += 24.;
+        }
+        if lst >= 24. {
+            lst -= 24.;
+        }
+        let (h, m, s) = decimal_hour_to_hms(lst);
+
+        self.with_hour(h)
+            .unwrap()
+            .with_minute(m)
+            .unwrap()
+            .with_second(s)
+            .unwrap()
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -70,11 +139,7 @@ impl JulianDay for Date<Utc> {
     }
 
     fn from_days_into_year(year: i32, days: u32) -> Self {
-        let a = if is_leap_year(year) {
-            1523.
-        } else {
-            1889.
-        };
+        let a = if is_leap_year(year) { 1523. } else { 1889. };
         let b = ((days as f64 + a - 122.1) / 365.25).trunc();
         let c = days as f64 + a - (365.25 * b).trunc();
         let e = (c / 30.6001).trunc();
@@ -103,9 +168,10 @@ impl JulianDay for DateTime<Utc> {
         };
 
         // Add fractional day
-        d += self.hour() as f64 / 24.
-            + self.minute() as f64 / (24. * 60.)
-            + self.second() as f64 / (24. * 60. * 60.);
+        d += self.decimal_day();
+        //d += self.hour() as f64 / 24.
+        //    + self.minute() as f64 / (24. * 60.)
+        //    + self.second() as f64 / (24. * 60. * 60.);
 
         b + (365.25 * y as f64 - t as f64).trunc()
             + (30.6001 * (m as f64 + 1.)).trunc()
@@ -172,5 +238,54 @@ impl JulianDay for DateTime<Utc> {
 
     fn from_days_into_year(year: i32, days: u32) -> Self {
         Date::from_days_into_year(year, days).and_hms(0, 0, 0)
+    }
+}
+
+fn decimal_hour_to_hms(hour: f64) -> (u32, u32, u32) {
+    let minute = hour.fract() * 60.;
+    let second = minute.fract() * 60.;
+
+    (
+        hour.trunc() as u32,
+        minute.trunc() as u32,
+        second.round() as u32,
+    )
+}
+
+/*
+fn to_hms(time: f64) -> (u32, u32, u32) {
+    let mut fd_h = time * 24. + 12.;
+    if fd_h >= 24. {
+        fd_h -= 24.;
+    }
+    let fd_m = fd_h.fract() * 60.;
+    let fd_s = fd_m.fract() * 60.;
+
+    (
+        fd_h.trunc() as u32,
+        fd_m.trunc() as u32,
+        fd_s.trunc() as u32,
+    )
+}
+*/
+
+trait DecimalTime: Timelike {
+    fn decimal_day(&self) -> f64;
+    fn decimal_hour(&self) -> f64;
+}
+
+impl<Tz: TimeZone> DecimalTime for DateTime<Tz> {
+    fn decimal_day(&self) -> f64 {
+        self.hour() as f64 / 24.
+            + self.minute() as f64 / (24. * 60.)
+            + self.second() as f64 / (24. * 60. * 60.)
+            + self.nanosecond() as f64 / (24. * 60. * 60. * 1e9)
+    }
+
+    fn decimal_hour(&self) -> f64 {
+        self.hour() as f64
+            + self.minute() as f64 / 60.
+            + self.second() as f64 / (60. * 60.)
+            + self.nanosecond() as f64 / (60. * 60. * 1e9)
     }
 }

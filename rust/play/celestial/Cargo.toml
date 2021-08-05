@@ -7,4 +7,5 @@ edition = "2018"
 
 [dependencies]
 chrono = "0.4.19"
+chrono-tz = "0.5.3"
 float_eq = "0.6.0"
