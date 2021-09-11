@@ -1,4 +1,5 @@
 use ntz::si::*;
+use ntz::angle::*;
 
 fn main() {
     let inch = inches(22.);
@@ -38,6 +39,12 @@ mod tests {
     fn eq(x: f64, y: f64) -> bool {
         println!("{} vs {}", x, y);
         (x - y).abs() < f64::EPSILON
+    }
+
+    #[test]
+    fn homogeneity() {
+        let a = grams(99.) * meters(22.) + grams(2323.) * meters(98.);
+        //let b = grams(99.) * meters(22.) + grams(2323.) * degrees(98.);
     }
 
     #[test]

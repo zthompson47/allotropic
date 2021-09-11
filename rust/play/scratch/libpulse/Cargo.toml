@@ -1,0 +1,11 @@
+[package]
+name = "libpulse"
+version = "0.1.0"
+authors = ["Zach Thompson <zach@allotropic.com>"]
+edition = "2018"
+
+[dependencies]
+libpulse-binding = "2.23.0"
+libpulse-simple-binding = "2.23.0"
+tapedeck = { path = "/home/zach/rust/tapedeck" }
+tokio = { version = "1.2.0", features = ["macros"] }

@@ -1,9 +1,10 @@
 [package]
-name = "unitz"
+name = "wot"
 version = "0.1.0"
 edition = "2018"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-paste = "1.0.5"
+dwt = "0.5.2"
+#num-traits = { version = "0.2.14", default_features = false }

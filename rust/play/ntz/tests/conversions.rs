@@ -104,7 +104,7 @@ fn ch1() {
     );
     // 18.
     assert_float_eq!(
-        t::hours(20.352).to_hms_tuple(),
+        t::hours(20.352).to_hms(),
         (20., 21., 7.2),
         abs <= (1., 1., 0.1)
     );

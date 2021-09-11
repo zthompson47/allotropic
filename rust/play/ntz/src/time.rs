@@ -4,8 +4,8 @@ unit! {
     Time {
         Hour => (hours, "h", 60. * 60.),
         Minute => (minutes, "min", 60.),
-        Second => (seconds, "s", 1.),
-        Hms => (hms, "hms", 1.)
+        Second => (seconds, "s", 1.)
+        //Hms => (hms, "hms", 1.)
     }
 }
 
@@ -13,15 +13,13 @@ impl Value<Time> {
     pub fn from_hms(hms: (f64, f64, f64)) -> Self {
         Value {
             value: (hours(hms.0) + minutes(hms.1) + seconds(hms.2))
-                .to_hms()
+                .to_seconds()
                 .value,
-            unit: Time::Hms(1.),
+            unit: Time::Second(1.),
         }
     }
-}
 
-impl Value<Time> {
-    pub fn to_hms_tuple(self) -> (f64, f64, f64) {
+    pub fn to_hms(self) -> (f64, f64, f64) {
         let h = self.to_hours().value;
         let h_trunc = h.trunc();
         let h_rem = h.fract();

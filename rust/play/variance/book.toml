@@ -1,0 +1,6 @@
+[book]
+authors = ["Zach Thompson"]
+language = "en"
+multilingual = false
+src = "src"
+title = "Basic Variance"
