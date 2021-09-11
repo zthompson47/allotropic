@@ -5,10 +5,11 @@ use reqwest::{header::CACHE_CONTROL, Client};
 
 use crate::{
     cache::Cache,
-    error::{err, Result},
+    error::{err, Error, Result},
     forecast::Forecast,
     location::Point,
     types::{Position, Url},
+    NWS_API,
 };
 
 /// Base URL for the National Weather Service API.
@@ -61,6 +62,14 @@ impl ApiClient {
     /// Create a builder to construct a new `ApiClient`.
     pub fn builder() -> ApiClientBuilder {
         ApiClientBuilder::default()
+    }
+
+    /// Create a National Weather Service client.
+    pub fn nws(app: &str, api_key: &str) -> Result<Self> {
+        ApiClient::builder()
+            .base_url(NWS_API)
+            .api_key(app, api_key)
+            .build()
     }
 
     /// Translate a latitude and longitude into a gridpoint location in order

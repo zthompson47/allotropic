@@ -8,3 +8,5 @@ pub mod types;
 
 pub const APP: &str = "wthr";
 pub const NWS_API: &str = "https://api.weather.gov";
+
+//pub use crate::client::{ApiClient, ApiClientBuilder};
