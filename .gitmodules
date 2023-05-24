@@ -1,0 +1,12 @@
+[submodule "work/noize"]
+	path = work/noize
+	url = git@github.com:zthompson47/noize.git
+[submodule "work/phonolyze"]
+	path = work/phonolyze
+	url = git@github.com:zthompson47/phonolyze.git
+[submodule "work/tailog"]
+	path = work/tailog
+	url = git@github.com:zthompson47/tailog.git
+[submodule "work/time2freq"]
+	path = work/time2freq
+	url = git@github.com:zthompson47/time2freq.git

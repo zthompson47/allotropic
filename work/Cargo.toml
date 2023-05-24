@@ -1,0 +1,9 @@
+[workspace]
+
+members = [
+    "noize",
+    "phonolyze",
+    "phonolyze/scratch/easings",
+    "phonolyze/scratch/fft_norm",
+    "time2freq",
+]
