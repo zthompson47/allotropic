@@ -9,6 +9,7 @@ mod float;
 pub mod si;
 pub mod temperature;
 pub mod time;
+pub mod scalar;
 
 pub mod prelude {
     pub use super::{unit, Unit, Value};

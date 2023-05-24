@@ -1,0 +1,8 @@
+[package]
+name = "memory"
+version = "0.1.0"
+edition = "2018"
+resolver = "2"
+
+[dependencies]
+sixtyfps = "0.1.2"

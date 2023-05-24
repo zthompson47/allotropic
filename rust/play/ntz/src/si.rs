@@ -24,3 +24,14 @@ unit! {
         Kilogram => (kilograms, "kg", 1.)
     }
 }
+
+unit! {
+    VolumeUnit {
+        Teaspoon => (teaspoons, "tsp", 1.),
+        Tablespoon => (tablespoons, "tbsp", 1.),
+        Cup => (cups, "cup", 1.),
+        Quart => (quarts, "qt", 1.),
+        Pint => (pints, "pint", 1.),
+        Gallon => (gallons, "gal", 1.)
+    }
+}

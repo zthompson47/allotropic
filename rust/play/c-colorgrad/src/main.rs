@@ -156,6 +156,7 @@ async fn animate2() -> Result<()> {
                     for (i, val) in data
                         .iter()
                         .chain([0.].iter().cycle())
+                        .step_by(2) // use just one channel of audio
                         .take(width)
                         .enumerate()
                     {
@@ -309,7 +310,7 @@ async fn animate2() -> Result<()> {
         }
         stdout.flush().unwrap();
         //std::thread::sleep(std::time::Duration::from_millis(84));
-        std::thread::sleep(std::time::Duration::from_millis(42));
+        //std::thread::sleep(std::time::Duration::from_millis(42));
     }
 }
 

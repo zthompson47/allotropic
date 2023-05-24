@@ -4,11 +4,20 @@ version = "0.1.0"
 authors = ["Zach Thompson <zach@allotropic.com>"]
 edition = "2018"
 
+resolver = "2"
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+anyhow = "1.0.44"
 cpal = "0.13.3"
+crossbeam-channel = "0.5.1"
+env_logger = "0.9.0"
+log = "0.4.14"
 microfft = "0.4.0"
+pixels = "0.6.0"
+winit = "0.25.0"
+winit_input_helper = "0.10.0"
 
 [profile.release]
 debug = true
