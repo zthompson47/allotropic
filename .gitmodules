@@ -10,3 +10,6 @@
 [submodule "work/time2freq"]
 	path = work/time2freq
 	url = git@github.com:zthompson47/time2freq.git
+[submodule "work/tapedeck"]
+	path = work/tapedeck
+	url = git@github.com:zthompson47/tapedeck.git
