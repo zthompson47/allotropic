@@ -4,5 +4,6 @@ members = [
     "noize",
     "phonolyze",
     "tailog",
+    "tapedeck",
     "time2freq",
 ]
