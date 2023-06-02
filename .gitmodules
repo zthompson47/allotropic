@@ -13,3 +13,6 @@
 [submodule "work/tapedeck"]
 	path = work/tapedeck
 	url = git@github.com:zthompson47/tapedeck.git
+[submodule "work/space"]
+	path = work/space
+	url = git@github.com:zthompson47/space.git

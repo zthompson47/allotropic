@@ -3,6 +3,7 @@
 members = [
     "noize",
     "phonolyze",
+    "space",
     "tailog",
     "tapedeck",
     "time2freq",
